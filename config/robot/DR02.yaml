@@ -11,6 +11,7 @@ joints_limit_offset_degrees:
 # blending offset for knee angle, degrees
 knee_angle_offset_degrees: 15.0
 
+# 通用连杆名称: [起点 body, 终点 body]
 robot_links:
   left_hip: [base_link, left_hip_x_link]
   left_thigh: [left_hip_x_link, left_knee_link]
@@ -35,7 +36,7 @@ contact_links: [left_foot_end_link, left_toe_link,
                 right_foot_end_link, right_toe_link, 
                 left_hand_link, right_hand_link]
 
-
+# "关键点名称": ["DR02 body名称", 位置代价权重, 姿态代价权重]
 ik_match_table: {
   "hips_mean": ["base_link", 100, 0],  
 
@@ -65,6 +66,8 @@ contact_height_threshold: 0.025
 contact_height_lpf_alpha: 0.2
 contact_pos_fixed_factor: 15.0
 
+# key_frame_config 用于把源数据中关键点的局部姿态，转换到目标机器人 body 所期望的局部坐标系约定下，
+# 用于解决源数据和目标机器人之间的局部坐标系定义不一致问题。
 key_frame_config:
   hips_mean:
     offset_deg_xyz: [0.0, 0.0, 0.0]

@@ -1,4 +1,4 @@
-
+# 定义标准人体骨架中各关节的连接关系与连杆的父子方向
 skeleton_links:
   left_hip: [hips_mean, left_up_leg]
   left_thigh: [left_up_leg, left_leg]
@@ -18,12 +18,15 @@ skeleton_links:
   right_arm: [right_arm, right_fore_arm]
   right_fore_arm: [right_fore_arm, right_hand]
 
-
+# 定义人体骨架中需要进行接触检测的部位
 contact_links: [left_foot_end, left_toe, 
                 right_foot_end, right_toe, 
                 left_hand, right_hand]
 
+# 在时间窗口内估计接触点速度，并结合速度和离地高度阈值判定接触状态
 contact_vel_calculate_window: 6
 contact_vel_threshold: 0.5
 contact_height_threshold: 0.075
+
+# 平滑接触偏移，减少关键点整体高度校正时的逐帧抖动
 contact_height_lpf_alpha: 0.2

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 把一份源机器人动作依次转换给多个目标机器人，再把所有目标机器人的结果放进同一个 MuJoCo 窗口中播放。
 # Step 1) Run smpl_replay without viewer        (per robot)
 # Step 2) Run robot_retarget                     (per robot)
 # Step 3) Run multi_robot_visualize              (once, for all robots)
@@ -32,6 +33,7 @@ else
   echo "[error] no python interpreter found; set PYTHON_BIN explicitly" >&2
   exit 127
 fi
+
 SKELETON_CONFIG="${SKELETON_CONFIG:-config/robot/${ORIGIN_ROBOT}.yaml}"
 KEYPOINTS_NAME="${KEYPOINTS_NAME:-$(basename "${ROBOT_MOTION_FILE}" .csv)}"
 
@@ -45,6 +47,8 @@ fi
 # Parse the (possibly space-separated) robot list. Each robot gets its own
 # smpl_replay (step 1) + robot_retarget (step 2) pass, then a single
 # multi_robot_visualize (step 3) renders all of them together.
+
+# 将机器人字符串转化为 bash 数组
 read -r -a VIS_ROBOT_ARR <<< "${VIS_ROBOTS}"
 if [[ "${#VIS_ROBOT_ARR[@]}" -eq 0 ]]; then
   echo "[error] VIS_ROBOTS is empty" >&2
