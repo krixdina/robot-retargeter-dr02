@@ -164,17 +164,24 @@ def parse_args() -> argparse.Namespace:
 	return parser.parse_args()
 
 
+# 用途：确定机器人回放阶段应读取的运动 CSV 文件，并确保该文件已经存在。
+# 输入：motion_file 表示调用者可选的显式运动文件路径；传入空值时改为按项目约定自动推导路径。
+# 输入：source_robot_config_path 表示源机器人配置文件路径，自动推导时从中读取关键点文件信息和机器人名称。
+# 输出：返回经过用户目录展开和绝对路径解析、且已确认存在的机器人运动 CSV 文件路径。
 def resolve_motion_file(motion_file: Path | None, source_robot_config_path: Path) -> Path:
+	# 优先采用 motion_file（调用者显式指定的机器人运动 CSV 路径），并在返回前验证文件是否存在。
 	if motion_file is not None:
 		resolved = motion_file.expanduser().resolve()
 		if not resolved.exists():
 			raise FileNotFoundError(f"Robot motion CSV not found: {resolved}")
 		return resolved
 
+	# 未显式指定运动文件时，从源机器人参数 yaml 中读取关键点文件路径，并提取不含约定后缀的动作名称。
 	keypoints_path = load_path_config(source_robot_config_path, "keypoints_path").expanduser().resolve()
 	keypoint_stem = keypoints_path.stem
 	if keypoint_stem.endswith("_keypoints"):
 		keypoint_stem = keypoint_stem[: -len("_keypoints")]
+	# 按动作名称与源机器人配置名称组合出生成脚本所采用的 CSV 路径，并确认生成结果可用。
 	derived = Path("output_data/robot_motion") / f"{keypoint_stem}_{source_robot_config_path.stem}.csv"
 	resolved = derived.expanduser().resolve()
 	if not resolved.exists():
@@ -283,6 +290,9 @@ def canonicalize_contact_name(body_name: str) -> str:
 	return body_name
 
 
+# 用途：将源机器人配置中的具体连杆端点转换为项目统一的语义身体节点，使不同机器人可复用同一套回放和重定向流程。
+# 输入：source_robot_links 表示“语义连杆名 → 起点与终点 body 名称”的源机器人配置映射。
+# 输出：返回统一的语义身体节点到具体 body 名称的映射；单个 body 表示普通节点，一对 body 表示由左右节点共同确定的中心节点。
 def resolve_source_semantic_body_mapping(
 	source_robot_links: dict[str, tuple[str, str]],
 ) -> dict[str, str | tuple[str, str]]:
@@ -302,10 +312,12 @@ def resolve_source_semantic_body_mapping(
 		"right_arm",
 		"right_fore_arm",
 	)
+	# 先确认统一骨架所需的源连杆齐全，避免后续构造映射时因配置缺项产生不完整的关键点序列。
 	for link_name in required_links:
 		if link_name not in source_robot_links:
 			raise ValueError(f"Missing source robot link required for replay: {link_name}")
 
+	# 按统一骨架节点定义选择每条配置连杆的起点或终点；骨盆中心和肩部中心保留左右 body 对，供后续计算中心位置与平均朝向。
 	return {
 		"hips_mean": (source_robot_links["left_hip"][0], source_robot_links["right_hip"][0]),
 		"hips": source_robot_links["left_hip"][0],
@@ -335,25 +347,38 @@ def resolve_source_semantic_body_mapping(
 	}
 
 
+# 用途：将 MJCF 中的 body 名称解析为 MuJoCo 模型内部索引，并在配置名称不匹配模型时尽早给出明确错误。
+# 输入：model 表示已加载的 MuJoCo 机器人模型；body_name 表示配置文件中的目标刚体名称。
+# 输出：返回 body_id，即该刚体用于访问位置、朝向等 MuJoCo 结果数组的非负整数索引；找不到时抛出异常而不返回索引。
 def get_body_id(model: mujoco.MjModel, body_name: str) -> int:
+	# 限定查询对象为 body，避免与同名的关节、几何体或 site 混淆。
 	body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
 	if body_id < 0:
+		# 让配置与 MJCF 模型名称不一致的问题在读取阶段暴露，避免后续以无效索引访问运动学结果。
 		raise ValueError(f"Missing body in MJCF: {body_name}")
 	return int(body_id)
 
 
+# 用途：将源机器人关节状态的逐帧序列送入 MuJoCo 前向运动学，提取后续动作重定向与接触检测所需的身体节点位置和朝向。
+# 输入：qpos_frames 表示每帧完整的 MuJoCo 广义坐标；source_robot_mjcf_path 表示源机器人的 MJCF 模型文件；source_robot_links 表示语义连杆与模型 body 名称的对应关系；contact_body_names 表示需要记录世界坐标的接触 body 名称。
+# 输出：返回 positions（按统一语义节点顺序存放的逐帧世界坐标）、quaternions（这些节点对应的 wxyz 世界朝向），以及 contact_positions（用于后续速度和高度接触判定的逐帧接触 body 世界坐标）。
 def build_robot_replay_buffers(
 	qpos_frames: np.ndarray,
 	source_robot_mjcf_path: Path,
 	source_robot_links: dict[str, tuple[str, str]],
 	contact_body_names: tuple[str, ...],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+	# 加载源机器人模型并校验每帧关节状态的维度，确保可安全写入 MuJoCo 的 qpos 状态向量。
 	model = mujoco.MjModel.from_xml_path(str(source_robot_mjcf_path))
 	data = mujoco.MjData(model)
 	validate_motion_shape(model, qpos_frames, source_robot_mjcf_path)
 
+	# 建立统一语义关键身体节点到数组序列号的索引，并读取目标输出所需的连杆顺序及双方关键帧坐标系修正参数。
 	body_slots = {name: idx for idx, name in enumerate(REPLAY_BODY_NAMES)}
+	# 建立统一语义关键身体节点到机器人具体 body 名称的映射。
 	semantic_mapping = resolve_source_semantic_body_mapping(source_robot_links)
+	# 预先把配置中的 body 名称转换为模型内部索引；部分语义节点由左右两个 body 的中心表示，因此保留一对索引。
+	# 建立统一语义关键身体节点到具体 body 索引的映射，供后续循环中直接访问 MuJoCo 运动学结果。
 	resolved_body_ids: dict[str, int | tuple[int, int]] = {}
 	for semantic_name, body_spec in semantic_mapping.items():
 		if isinstance(body_spec, tuple):
@@ -362,10 +387,15 @@ def build_robot_replay_buffers(
 			resolved_body_ids[semantic_name] = get_body_id(model, body_spec)
 
 	contact_body_ids = [get_body_id(model, body_name) for body_name in contact_body_names]
+	# positions 形状为 [帧数, 语义节点数, 3]，末维依次存放世界坐标 x、y、z。
+	# quaternions 形状为 [帧数, 语义节点数, 4]，末维依次存放 wxyz 朝向四元数分量。
 	positions = np.zeros((qpos_frames.shape[0], len(REPLAY_BODY_NAMES), 3), dtype=np.float32)
 	quaternions = np.broadcast_to(IDENTITY_QUAT_WXYZ, (qpos_frames.shape[0], len(REPLAY_BODY_NAMES), 4)).copy()
 	contact_positions = np.zeros((qpos_frames.shape[0], len(contact_body_ids), 3), dtype=np.float32)
 
+	# 对每帧关节状态执行前向运动学，使 data.xpos 与 data.xquat 更新为该姿态下所有 body 的世界位置和世界朝向。
+	# 同时为逐帧回放创建终端进度条；它仍产出“帧编号、该帧关节状态”，只额外显示处理进度、总帧数和速度。
+	# total 传入动作总帧数，desc 设置进度条说明文字，unit 指定计数单位为 frame。
 	frame_iter = iter_progress(
 		enumerate(qpos_frames),
 		total=qpos_frames.shape[0],
@@ -376,6 +406,8 @@ def build_robot_replay_buffers(
 		data.qpos[:] = qpos
 		mujoco.mj_forward(model, data)
 
+		# 将模型 body 的运动学结果写入统一骨架槽位；由两个 body 共同定义的中心节点同时取位置均值和平均朝向。
+		# 为每一帧中的每个语义关键身体节点计算世界坐标和朝向，并存入 positions 与 quaternions。
 		for semantic_name, slot in body_slots.items():
 			if semantic_name not in resolved_body_ids:
 				continue
@@ -391,12 +423,23 @@ def build_robot_replay_buffers(
 				positions[frame_idx, slot, :] = data.xpos[body_spec]
 				quaternions[frame_idx, slot, :] = data.xquat[body_spec]
 
+		# 额外保留配置指定接触 body 的世界位置，供函数外部根据速度和离地高度识别支撑阶段。
 		for contact_idx, body_id in enumerate(contact_body_ids):
 			contact_positions[frame_idx, contact_idx, :] = data.xpos[body_id]
 
 	return positions.astype(np.float32), quaternions.astype(np.float32), contact_positions
 
 
+# 用途：
+# 根据机器人各接触 body 在连续帧中的世界坐标，结合运动速度和离地高度，逐帧判定每个接触点是否处于支撑接触状态。
+# 输入：
+# - contact_positions：形状为 [帧数, 接触点数, 3] 的世界坐标；每个接触点由源机器人配置的 contact_links 指定，最后一维的第三个分量是高度。
+# - fps：动作数据的采样帧率，用于将跨帧位移换算为每秒速度。
+# - vel_window：计算速度时使用的时间窗口长度，用于在当前帧前后取样以减小逐帧位置噪声的影响。
+# - vel_threshold：速度判定阈值；接触点的估计速度不高于该值才可视为静止。
+# - height_threshold：高度判定阈值；接触点的世界坐标高度不高于该值才可视为接近地面。
+# 输出：
+# - 返回 contact_speeds：形状为 [帧数, 接触点数] 的浮点速度数组，以及 contact_states：相同形状的布尔接触掩码；只有同时低速且低于高度阈值的位置为 True。
 def compute_robot_contact_sequence(
 	contact_positions: np.ndarray,
 	fps: float,
@@ -404,12 +447,14 @@ def compute_robot_contact_sequence(
 	vel_threshold: float,
 	height_threshold: float,
 ) -> tuple[np.ndarray, np.ndarray]:
+	# 在每个接触点的相邻时间窗口内计算位移速度，得到用于抑制瞬时坐标抖动的逐帧运动量。
 	contact_speeds = compute_windowed_point_speeds(
 		contact_positions,
 		fps=fps,
 		window=vel_window,
 		progress_desc="Contact speed",
 	)
+	# 仅当估计运动速度足够低，且世界坐标的竖直分量足够接近地面时，才将该帧标记为接触。
 	contact_states = np.logical_and(
 		contact_speeds <= float(vel_threshold),
 		contact_positions[:, :, 2] <= float(height_threshold),
@@ -518,6 +563,10 @@ def transform_key_frame_quaternions_wxyz(
 	return adjusted_xyzw[:, [3, 0, 1, 2]].astype(np.float32)
 
 
+# 用途：将源机器人的逐帧身体关键点与朝向，按目标机器人的连杆尺寸和坐标系约定重定向，并整理为可导出的固定顺序数据。
+# 输入：source_positions 表示源机器人每一帧各语义身体节点的世界坐标；source_quaternions 表示对应节点的 wxyz 朝向四元数。
+# 输入：target_robot_link_lengths 表示目标机器人各语义连杆在默认姿态下的长度；source_robot_config_path 与 target_robot_config_path 分别提供源、目标机器人的关键帧坐标系及连杆配置。
+# 输出：依次返回目标顺序的关键点坐标、经过坐标系变换的关键点四元数、同一批用于后续接触点锚定的原始四元数、源连杆向量、各连杆缩放比例，以及缩放比例是否为静态值的标记。
 def build_robot_retarget_keypoints(
 	source_positions: np.ndarray,
 	source_quaternions: np.ndarray,
@@ -532,6 +581,7 @@ def build_robot_retarget_keypoints(
 		dict[str, float | np.ndarray],
 		dict[str, bool],
 	]:
+	# 建立统一语义关键身体节点到数组列号的索引，并读取目标输出所需的连杆顺序及双方关键帧坐标系修正参数。
 	body_slots = {name: idx for idx, name in enumerate(REPLAY_BODY_NAMES)}
 	target_robot_links = load_robot_links_config(target_robot_config_path)
 	source_key_frame_offset_degrees, source_key_frame_axis_map = load_key_frame_config(
@@ -545,6 +595,7 @@ def build_robot_retarget_keypoints(
 	)
 	left_leg_links = derive_leg_body_chain_from_links(SOURCE_SEMANTIC_LINKS, "left")
 	right_leg_links = derive_leg_body_chain_from_links(SOURCE_SEMANTIC_LINKS, "right")
+	# 从源动作逐帧提取语义连杆的长度、方向和端点关系，再以目标机器人尺寸计算缩放比例。
 	source_link_lengths, source_link_vectors, resolved_source_links = compute_link_geometry_from_positions(
 		SOURCE_SEMANTIC_LINKS,
 		body_slots,
@@ -565,6 +616,7 @@ def build_robot_retarget_keypoints(
 		right_leg_links,
 		quaternions=source_quaternions,
 	)
+	# 输出数组的第 0 项固定为骨盆中心；其余项按目标机器人配置的连杆顺序排列，保证下游保存和回放时的索引一致。
 	ordered_keypoints = np.zeros((source_positions.shape[0], len(target_robot_links) + 1, 3), dtype=np.float32)
 	ordered_quaternions = np.zeros((source_positions.shape[0], len(target_robot_links) + 1, 4), dtype=np.float32)
 	ordered_raw_quaternions = np.zeros((source_positions.shape[0], len(target_robot_links) + 1, 4), dtype=np.float32)
@@ -581,6 +633,8 @@ def build_robot_retarget_keypoints(
 		hips_mean_offset,
 	)
 	ordered_quaternions[:, 0, :] = ordered_raw_quaternions[:, 0, :]
+
+	# 为每一条目标连杆选取缩放后源骨架中的子端点，并把其朝向从源坐标系转换到目标坐标系。
 	for keypoint_idx, link_name in enumerate(target_robot_links, start=1):
 		if link_name not in resolved_source_links:
 			raise ValueError(f"Missing source semantic link for target robot link: {link_name}")
@@ -848,17 +902,20 @@ def play_robot_motion(
 
 def main() -> None:
 	args = parse_args()
+	# 将命令行提供的源、目标机器人 YAML 路径统一为可定位的绝对路径，供后续加载配置、推导输出文件名及打印摘要共用。
 	source_robot_config_path = args.source_robot_config.expanduser().resolve()
 	target_robot_config_path = args.target_robot_config.expanduser().resolve()
 	motion_file = resolve_motion_file(args.motion_file, source_robot_config_path)
 
 	source_robot_mjcf_path = load_path_config(source_robot_config_path, "robot_xml_path").expanduser().resolve()
 	target_robot_mjcf_path = load_path_config(target_robot_config_path, "robot_xml_path").expanduser().resolve()
+	# 建立“统一的语义连杆名 → 起点与终点 body 名称”的对应映射关系
 	source_robot_links = load_robot_links_config(source_robot_config_path)
 	target_robot_links = load_robot_links_config(target_robot_config_path)
 	source_contact_links = load_yaml_body_list_config(source_robot_config_path, "contact_links")
 	contact_names = tuple(canonicalize_contact_name(name) for name in source_contact_links)
 
+	# 加载形状为 [帧数, nq] 的动作数组；第 0 维为 CSV 中的动作帧数，第 1 维为每帧完整的 MuJoCo 广义坐标。
 	qpos_frames = load_robot_motion_csv(motion_file)
 	positions, quaternions, contact_positions = build_robot_replay_buffers(
 		qpos_frames=qpos_frames,
@@ -899,6 +956,7 @@ def main() -> None:
 		config_path=target_robot_config_path,
 		robot_mjcf_path=target_robot_mjcf_path,
 	)
+	
 	(
 		retarget_keypoints,
 		retarget_keypoint_quaternions,

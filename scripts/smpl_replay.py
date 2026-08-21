@@ -5,6 +5,14 @@ This script loads an AMASS-style motion file, computes SMPL joint poses,
 replays them on the project skeleton, and writes retarget-ready keypoints
 to output_data/keypoints.
 
+Function:
+	- 从 .npz 文件读取人体姿态、位移和体型数据。
+	- 通过 SMPL-X 模型计算人体关节位置和姿态。
+	- 按目标机器人的各段连杆长度重新缩放人体骨架。
+	- 修正膝盖预弯、脚底位置和整体移动距离。
+	- 检测脚和手的接触状态。
+	- 输出供后续运动重定向使用的 *_keypoints.pkl 文件。
+
 Usage:
 	# Run with defaults (open viewer)
 	python scripts/smpl_replay.py
@@ -398,12 +406,17 @@ def parse_args() -> argparse.Namespace:
 	return parser.parse_args()
 
 
+# 用途：从简化 YAML 文本中读取指定的连杆配置段，建立“统一的语义连杆名 → 起点与终点 body 名称”的对应关系，供后续计算长度、骨架方向和关键点顺序使用。
+# 输入：config_path 为待读取的机器人或人体骨架配置文件路径；section_name 为其中要读取的配置段名称，例如机器人连杆段或骨架连杆段。
+# 输出：返回以连杆语义名称为键、以两个 body 名称（起点、终点）为值的映射；配置缺失或格式不符合要求时抛出异常。
 def load_link_pairs_config(config_path: Path, section_name: str) -> dict[str, tuple[str, str]]:
+	# 先确保配置文件存在，避免将路径或部署问题伪装成配置内容错误。
 	if not config_path.exists():
 		raise FileNotFoundError(f"Link config file not found: {config_path}")
 
 	link_pairs: dict[str, tuple[str, str]] = {}
 	in_section = False
+	# 逐行处理，并去除行内注释和空行；只解析目标配置段中带缩进的条目。
 	for raw_line in config_path.read_text(encoding="utf-8").splitlines():
 		line = raw_line.split("#", 1)[0].rstrip()
 		if not line.strip():
@@ -417,6 +430,7 @@ def load_link_pairs_config(config_path: Path, section_name: str) -> dict[str, tu
 		if not raw_line[:1].isspace():
 			break
 
+		# 每个条目必须写成“连杆名称: [起点 body, 终点 body]”，以保持后续几何计算所需的父子方向。
 		stripped = line.strip()
 		link_name, separator, body_spec = stripped.partition(":")
 		if not separator:
@@ -432,15 +446,22 @@ def load_link_pairs_config(config_path: Path, section_name: str) -> dict[str, tu
 
 		link_pairs[link_name.strip()] = (body_names[0], body_names[1])
 
+	# 空映射说明指定配置段不存在、为空，或没有可用条目，不能继续进行重定向。
 	if not link_pairs:
 		raise ValueError(f"No {section_name} entries found in: {config_path}")
 	return link_pairs
 
 
+# 用途：读取机器人配置中的连杆端点定义，作为计算目标机器人尺寸和组织机器人关键点的统一入口。
+# 输入：config_path 为目标机器人配置文件的路径。
+# 输出：返回机器人语义连杆到两个 MuJoCo body 名称（起点、终点）的映射。
 def load_robot_links_config(config_path: Path) -> dict[str, tuple[str, str]]:
 	return load_link_pairs_config(config_path, "robot_links")
 
 
+# 用途：读取标准人体骨架中的父子关节连接定义，作为提取源骨架方向、长度和重建关键点位置的统一入口。
+# 输入：config_path 为人体骨架配置文件的路径。
+# 输出：返回人体语义连杆到两个骨架关节名称（父端、子端）的映射。
 def load_skeleton_links_config(config_path: Path) -> dict[str, tuple[str, str]]:
 	return load_link_pairs_config(config_path, "skeleton_links")
 
@@ -751,12 +772,16 @@ def compute_robot_link_lengths(
 	if not robot_mjcf_path.exists():
 		raise FileNotFoundError(f"Robot MJCF file not found: {robot_mjcf_path}")
 
+	# 借用 mujoco 完成默认姿态下的前向运动学计算
 	model = mujoco.MjModel.from_xml_path(str(robot_mjcf_path))
 	data = mujoco.MjData(model)
 	mujoco.mj_forward(model, data)
 
+	# 创建空映射，用于按语义连杆名称保存机器人零位姿下两个身体节点世界坐标之间的欧氏距离。
 	link_lengths: dict[str, float] = {}
 	for link_name, (start_body, end_body) in robot_links.items():
+		# 将配置中的 MJCF body 名称解析为 MuJoCo 模型内部的 body 索引；
+		# 后续的运动学结果数组均以该索引访问。
 		start_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, start_body)
 		if start_body_id < 0:
 			raise ValueError(f"Missing robot body in MJCF: {start_body}")
@@ -764,6 +789,8 @@ def compute_robot_link_lengths(
 		if end_body_id < 0:
 			raise ValueError(f"Missing robot body in MJCF: {end_body}")
 
+		# mj_forward 已将默认位姿下各 body 的世界坐标写入 data.xpos。
+		# 取两个端点坐标的欧氏距离，得到当前语义连杆的长度。
 		start_pos = data.xpos[start_body_id]
 		end_pos = data.xpos[end_body_id]
 		link_lengths[link_name] = float(np.linalg.norm(end_pos - start_pos))
