@@ -994,6 +994,9 @@ def main() -> None:
 	)
 	# 此处不再修改已重定向关键点；重新取同一预弯参数，仅用于后续按预弯后的有效腿长缩放根节点位移。
 	knee_angle_offset_degrees = load_effective_knee_angle_offset_degrees(target_robot_config_path)
+	# 根据目标 MJCF 中脚端/脚趾相对脚踝关节坐标系的局部偏移，补充可用于接触处理的末端关键点及其名称。
+	# 以 DR02 为例，已有 left_calf/right_calf 关键点只到左右踝部；每只脚额外加入脚跟端（foot_end）和脚尖（toe）两个点，
+	# 共四个点，用于区分脚掌前后端的离地高度和接触状态，避免仅用踝部位置代替整个脚掌的接地情况。
 	(
 		retarget_keypoints,
 		retarget_keypoint_quaternions,
@@ -1007,17 +1010,22 @@ def main() -> None:
 		target_robot_mjcf_path=target_robot_mjcf_path,
 	)
 	# 预弯会缩短髋到脚的有效伸展距离，因此用该角度计算步幅缩放，保证全局移动尺度与当前腿形一致。
+	# 计算出用于计算根节点位移的缩放比例 leg_displacement_scale，以及目标机器人和源机器人的腿长。
 	leg_displacement_scale, robot_leg_length, source_leg_length = compute_leg_displacement_scale(
 		robot_link_lengths=target_robot_link_lengths,
 		skeleton_link_vectors=source_link_vectors,
 		knee_angle_offset_degrees=knee_angle_offset_degrees,
 	)
+	# 获得缩放后的关键点位移轨迹
 	retarget_keypoints = scale_keypoint_frame_displacements(
 		keypoints=retarget_keypoints,
 		displacement_scale=leg_displacement_scale,
 		root_keypoint_idx=0,
 	)
+	# 为重定向后的每一列关键点建立名称索引：骨盆、语义连杆终点，以及上一步补充的脚端/脚趾点。
+	# hips_mean 是左右髋部起点的中心，作为整条骨架唯一根节点（第 0 列）；其余关键点只保存各连杆的子端，避免共享父节点重复出现。
 	keypoint_names = ["hips_mean", *list(target_robot_links.keys()), *extra_keypoint_names]
+	# 对每帧取处于接触状态的最低接触点高度（无接触时沿用上一帧，并可低通滤波），再将所有关键点整体沿 z 轴下移该值，使支撑点贴地。
 	retarget_keypoints, contact_height_offsets = offset_keypoints_by_contact_height(
 		keypoints=retarget_keypoints,
 		keypoint_names=keypoint_names,
@@ -1026,12 +1034,14 @@ def main() -> None:
 		contact_states=contact_states,
 		height_lpf_alpha=contact_height_lpf_alpha,
 	)
+	# 优先采用 --output-path；未指定时按“目标机器人/动作名_from_源机器人_keypoints.pkl”规则生成输出路径。
 	keypoint_output_path = build_output_path(
 		output_path=args.output_path,
 		motion_file=motion_file,
 		source_robot_config_path=source_robot_config_path,
 		target_robot_config_path=target_robot_config_path,
 	)
+	# 将关键点名称、贴地校正后的位置、朝向、帧率及接触状态写入该 pkl；接触位置和速度虽传入，当前保存函数未将其写入 payload。
 	save_keypoints_pkl(
 		output_path=keypoint_output_path,
 		keypoint_names=keypoint_names,
@@ -1047,8 +1057,13 @@ def main() -> None:
 		contact_height_threshold=contact_height_threshold,
 	)
 
+	# 根据回放参数生成帧编号；它只决定后续查看器播放的起止范围和抽帧间隔
+	# --start-frame：起始帧；
+	# --end-frame：结束帧，-1 表示到最后一帧；
+	# --stride：每隔多少帧播放一次。
 	frame_ids = select_frame_slice(positions.shape[0], args.start_frame, args.end_frame, args.stride)
 	if args.print_summary:
+		# 仅在传入 --print-summary 时输出重定向配置、数组形状和缩放参数，便于排查问题；不改变关键点数据或输出文件。
 		print_robot_summary(
 			motion_file=motion_file,
 			source_robot_config_path=source_robot_config_path,
