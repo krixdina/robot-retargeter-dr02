@@ -563,7 +563,7 @@ def transform_key_frame_quaternions_wxyz(
 	return adjusted_xyzw[:, [3, 0, 1, 2]].astype(np.float32)
 
 
-# 用途：将源机器人的逐帧身体关键点与朝向，按目标机器人的连杆尺寸和坐标系约定重定向，并整理为可导出的固定顺序数据。
+# 用途：将源机器人的逐帧身体关键点与朝向，按目标机器人的连杆尺寸和坐标系约定完成重定向，并整理为可导出的固定顺序数据。
 # 输入：source_positions 表示源机器人每一帧各语义身体节点的世界坐标；source_quaternions 表示对应节点的 wxyz 朝向四元数。
 # 输入：target_robot_link_lengths 表示目标机器人各语义连杆在默认姿态下的长度；source_robot_config_path 与 target_robot_config_path 分别提供源、目标机器人的关键帧坐标系及连杆配置。
 # 输出：依次返回目标顺序的关键点坐标、经过坐标系变换的关键点四元数、同一批用于后续接触点锚定的原始四元数、源连杆向量、各连杆缩放比例，以及缩放比例是否为静态值的标记。
@@ -593,18 +593,32 @@ def build_robot_retarget_keypoints(
 		target_robot_config_path,
 		section_name="key_frame_config",
 	)
+	# 从源语义连杆表提取左右腿“髋—膝—脚”的有序节点链，供后续缩放后计算膝盖预弯时定位三处关节。
+	# 膝盖预弯是指：在动作重定向时，给原本完全伸直或接近伸直的腿，预先加入一个很小的屈膝角度。
 	left_leg_links = derive_leg_body_chain_from_links(SOURCE_SEMANTIC_LINKS, "left")
 	right_leg_links = derive_leg_body_chain_from_links(SOURCE_SEMANTIC_LINKS, "right")
 	# 从源动作逐帧提取语义连杆的长度、方向和端点关系，再以目标机器人尺寸计算缩放比例。
+	# 返回值类型：设：
+	# - 动作帧数为 F = source_positions.shape[0]；
+	# - 语义连杆数量为 L = len(SOURCE_SEMANTIC_LINKS)
+	# source_link_lengths 为 dict[str, np.ndarray]，每个连杆名称对应一个形状为：(F,) 的一维数组，表示该连杆在每一帧的长度。
+	# source_link_vectors 为 dict[str, np.ndarray]，每个连杆名称对应一个形状为：(F,3) 的数组，表示每一帧从父节点指向子节点的三维向量。
+	# resolved_source_links 为 dict[str, tuple[str, str]]。每个连杆名称对应一个元组，表示该连杆的父节点和子节点。
 	source_link_lengths, source_link_vectors, resolved_source_links = compute_link_geometry_from_positions(
 		SOURCE_SEMANTIC_LINKS,
 		body_slots,
 		source_positions,
 	)
+	# link_scales 为 dict[str, float | np.ndarray]，每个连杆名称对应目标连杆长度与源连杆长度的比值；当前实现中该值为形状 (F,) 的 float32 数组，表示每一帧的缩放比例。
+	# link_scale_is_static 为 dict[str, bool]，每个连杆名称对应一个布尔标记，用于表示该连杆的缩放比例是否在所有帧中保持不变；当前实现均为 False。
 	link_scales, link_scale_is_static = compute_link_scale_factors(
 		target_robot_link_lengths,
 		source_link_lengths,
 	)
+
+	# 按目标机器人与源机器人的比例完成重定向
+	# retarget_keypoints 为 np.ndarray，形状为 (F, B, 3)，表示各源语义节点按目标连杆尺寸缩放并施加膝盖预弯后的逐帧世界坐标。
+	# retarget_quaternions 为 np.ndarray，形状为 (F, B, 4)，表示与缩放后节点位置对应的逐帧 wxyz 朝向四元数。
 	retarget_keypoints, retarget_quaternions = apply_link_scales_to_positions(
 		source_positions,
 		resolved_source_links,
@@ -616,15 +630,20 @@ def build_robot_retarget_keypoints(
 		right_leg_links,
 		quaternions=source_quaternions,
 	)
+
 	# 输出数组的第 0 项固定为骨盆中心；其余项按目标机器人配置的连杆顺序排列，保证下游保存和回放时的索引一致。
+	# 三个数组形状均为 [帧数, 目标连杆数加 1, 分量数]；位置末维为 3，两个四元数数组末维为 4。
 	ordered_keypoints = np.zeros((source_positions.shape[0], len(target_robot_links) + 1, 3), dtype=np.float32)
 	ordered_quaternions = np.zeros((source_positions.shape[0], len(target_robot_links) + 1, 4), dtype=np.float32)
 	ordered_raw_quaternions = np.zeros((source_positions.shape[0], len(target_robot_links) + 1, 4), dtype=np.float32)
 	ordered_keypoints[:, 0, :] = retarget_keypoints[:, body_slots["hips_mean"], :]
+	# 读取源、目标配置对骨盆中心定义的坐标轴映射与欧拉角偏置；未配置时分别采用单位映射和零偏置。
 	source_hips_mean_offset = source_key_frame_offset_degrees.get("hips_mean", np.zeros(3, dtype=np.float32))
 	source_hips_mean_axis_map = source_key_frame_axis_map.get("hips_mean", np.eye(3, dtype=np.float32))
 	hips_mean_offset = key_frame_offset_degrees.get("hips_mean", np.zeros(3, dtype=np.float32))
 	hips_mean_axis_map = key_frame_axis_map.get("hips_mean", np.eye(3, dtype=np.float32))
+
+	# 将骨盆中心的朝向由源关键帧坐标系转换到目标关键帧坐标系；该版本同时保留给后续接触点锚定使用。
 	ordered_raw_quaternions[:, 0, :] = transform_key_frame_quaternions_wxyz(
 		retarget_quaternions[:, body_slots["hips_mean"], :],
 		source_hips_mean_axis_map,
@@ -634,7 +653,8 @@ def build_robot_retarget_keypoints(
 	)
 	ordered_quaternions[:, 0, :] = ordered_raw_quaternions[:, 0, :]
 
-	# 为每一条目标连杆选取缩放后源骨架中的子端点，并把其朝向从源坐标系转换到目标坐标系。
+	# 输出约定为“骨盆中心 + 每条连杆的子端点”：hips_mean 作为根节点已在循环外固定写入第 0 项；循环只写入子端点，因为连杆的父端点要么是根节点，要么已作为另一条连杆的子端点写入，避免重复保存共享节点。
+	# 同时将每个子端点的朝向由源关键帧坐标系转换到目标关键帧坐标系。
 	for keypoint_idx, link_name in enumerate(target_robot_links, start=1):
 		if link_name not in resolved_source_links:
 			raise ValueError(f"Missing source semantic link for target robot link: {link_name}")
@@ -917,6 +937,7 @@ def main() -> None:
 
 	# 加载形状为 [帧数, nq] 的动作数组；第 0 维为 CSV 中的动作帧数，第 1 维为每帧完整的 MuJoCo 广义坐标。
 	qpos_frames = load_robot_motion_csv(motion_file)
+	# 对源机器人执行 FK 计算
 	positions, quaternions, contact_positions = build_robot_replay_buffers(
 		qpos_frames=qpos_frames,
 		source_robot_mjcf_path=source_robot_mjcf_path,
@@ -956,7 +977,7 @@ def main() -> None:
 		config_path=target_robot_config_path,
 		robot_mjcf_path=target_robot_mjcf_path,
 	)
-	
+	# 将源机器人的逐帧身体关键点与朝向，按目标机器人的连杆尺寸和坐标系约定完成重定向，并整理为可导出的固定顺序数据。
 	(
 		retarget_keypoints,
 		retarget_keypoint_quaternions,
@@ -971,6 +992,7 @@ def main() -> None:
 		source_robot_config_path=source_robot_config_path,
 		target_robot_config_path=target_robot_config_path,
 	)
+	# 此处不再修改已重定向关键点；重新取同一预弯参数，仅用于后续按预弯后的有效腿长缩放根节点位移。
 	knee_angle_offset_degrees = load_effective_knee_angle_offset_degrees(target_robot_config_path)
 	(
 		retarget_keypoints,
@@ -984,6 +1006,7 @@ def main() -> None:
 		target_robot_config_path=target_robot_config_path,
 		target_robot_mjcf_path=target_robot_mjcf_path,
 	)
+	# 预弯会缩短髋到脚的有效伸展距离，因此用该角度计算步幅缩放，保证全局移动尺度与当前腿形一致。
 	leg_displacement_scale, robot_leg_length, source_leg_length = compute_leg_displacement_scale(
 		robot_link_lengths=target_robot_link_lengths,
 		skeleton_link_vectors=source_link_vectors,
@@ -1055,8 +1078,10 @@ def main() -> None:
 	if args.no_viewer:
 		return
 
+	# 为源机器人创建带地面的 MuJoCo 模型及其运行时状态，作为 CSV qpos 帧的回放载体。
 	source_model = load_model_with_ground(source_robot_mjcf_path)
 	source_data = mujoco.MjData(source_model)
+	# 在查看器中按 fps 写入每帧关节状态；同时叠加前面生成的目标机器人关键点和接触信息。
 	play_robot_motion(
 		model=source_model,
 		data=source_data,
@@ -1065,6 +1090,7 @@ def main() -> None:
 		retarget_quaternions=retarget_keypoint_quaternions,
 		contact_positions=contact_positions,
 		contact_states=contact_states,
+		# frame_ids 控制回放的起止范围和抽帧；loop 决定到末帧后是否从头继续播放。
 		fps=fps,
 		frame_ids=frame_ids,
 		loop=args.loop,

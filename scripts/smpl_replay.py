@@ -211,12 +211,17 @@ def multiply_quaternions_wxyz(q_left: np.ndarray, q_right: np.ndarray) -> np.nda
 	return result_xyzw[:, [3, 0, 1, 2]].astype(np.float32)
 
 
+# 用途：在髋部位置固定、脚部移动到新目标且大腿和小腿长度保持不变的条件下，逐帧求出新的膝部位置，并尽量延续原动作的弯曲平面和弯曲侧。
+# 输入：hip_positions 表示逐帧髋部世界坐标；knee_positions 与 foot_positions 分别表示调整前的膝部和脚部世界坐标，用于确定两段腿长及原始弯曲偏好。
+# 输入：target_foot_positions 表示预弯后要求脚部到达的逐帧世界坐标；髋部与该目标共同确定新腿链的端点和髋脚方向。
+# 输出：返回同时满足固定大腿长度、固定小腿长度和目标脚部位置的逐帧膝部世界坐标；不修改任何输入数组。
 def compute_two_bone_ik_knee_positions(
 	hip_positions: np.ndarray,
 	knee_positions: np.ndarray,
 	foot_positions: np.ndarray,
 	target_foot_positions: np.ndarray,
 ) -> np.ndarray:
+	# 由调整前的髋、膝、脚位置提取大腿和小腿向量及长度；这两个长度是求解过程中必须保持的几何约束。
 	upper_leg = knee_positions - hip_positions
 	lower_leg = foot_positions - knee_positions
 	upper_len = np.linalg.norm(upper_leg, axis=-1)
@@ -226,6 +231,7 @@ def compute_two_bone_ik_knee_positions(
 	original_hip_to_foot_len = np.linalg.norm(original_hip_to_foot, axis=-1)
 	original_u = original_hip_to_foot / np.clip(original_hip_to_foot_len[:, None], 1e-8, None)
 
+	# 取原膝部偏离髋脚直线的方向作为弯曲偏好；原腿近乎共线时借助世界坐标轴构造稳定的备用方向。
 	knee_from_hip = knee_positions - hip_positions
 	knee_along_u = np.sum(knee_from_hip * original_u, axis=-1, keepdims=True)
 	knee_projection = hip_positions + knee_along_u * original_u
@@ -245,6 +251,7 @@ def compute_two_bone_ik_knee_positions(
 	)
 	bend_pref = bend_pref / np.clip(np.linalg.norm(bend_pref, axis=-1, keepdims=True), 1e-8, None)
 
+	# 由原来的髋、膝、脚三点确定腿部弯曲平面的法向；退化情况下逐级使用弯曲偏好或世界坐标轴补足。
 	# Keep blended knee in the original hip-knee-foot plane whenever possible.
 	plane_normal = np.cross(upper_leg, original_hip_to_foot)
 	plane_normal_norm = np.linalg.norm(plane_normal, axis=-1, keepdims=True)
@@ -267,14 +274,17 @@ def compute_two_bone_ik_knee_positions(
 	)
 	plane_normal = plane_normal / np.clip(np.linalg.norm(plane_normal, axis=-1, keepdims=True), 1e-8, None)
 
+	# 新髋脚向量给出目标腿链的端点距离和主方向；距离限制可避免零距离除法以及完全伸直时弯曲方向不唯一的奇异状态。
 	target_hip_to_foot = target_foot_positions - hip_positions
 	target_hip_to_foot_len = np.linalg.norm(target_hip_to_foot, axis=-1)
 	target_u = target_hip_to_foot / np.clip(target_hip_to_foot_len[:, None], 1e-8, None)
 
 	d = np.clip(target_hip_to_foot_len, 1e-8, upper_len + lower_len - 1e-8)
+	# 将膝部写成“沿髋脚方向的投影 + 垂直于髋脚方向的偏移”，再由两段固定腿长解出投影距离和侧向高度。
 	x = (upper_len**2 - lower_len**2 + d**2) / (2.0 * np.clip(d, 1e-8, None))
 	h = np.sqrt(np.clip(upper_len**2 - x**2, 0.0, None))
 
+	# 在目标髋脚方向的垂直平面内选取弯曲方向，并让其符号与原膝部偏向一致，防止新膝部翻到腿链另一侧。
 	bend_pref_proj = bend_pref - np.sum(bend_pref * target_u, axis=-1, keepdims=True) * target_u
 	bend_dir = np.cross(plane_normal, target_u)
 	bend_dir_norm = np.linalg.norm(bend_dir, axis=-1, keepdims=True)
@@ -300,6 +310,7 @@ def compute_two_bone_ik_knee_positions(
 	bend_sign = np.where(np.sum(bend_dir * bend_pref_proj, axis=-1) >= 0.0, 1.0, -1.0)
 	bend_dir = bend_dir * bend_sign[:, None]
 
+	# 合成新的膝部位置：从固定髋部沿目标髋脚方向前进投影距离，再沿选定弯曲方向偏移对应高度。
 	blended_knee_positions = hip_positions + x[:, None] * target_u + h[:, None] * bend_dir
 	return blended_knee_positions.astype(np.float32)
 
@@ -1237,6 +1248,12 @@ def scale_keypoint_frame_displacements(
 	return (keypoints + translation_offsets[:, None, :]).astype(np.float32)
 
 
+# 用途：把源骨架的逐帧节点位置按目标机器人各连杆长度逐段重建，并对双腿加入指定的膝部预弯；若提供姿态，还会同步修正髋部和膝部朝向。
+# 输入：positions 表示源动作中各语义身体节点的逐帧世界坐标；link_pairs 表示按父节点到子节点排列的语义连杆拓扑。
+# 输入：body_slots 表示语义节点名称在位置数组中的列索引；link_scales 表示目标连杆长度相对源连杆长度的逐连杆缩放比例；link_vectors 表示缩放前各连杆从父节点指向子节点的逐帧向量。
+# 输入：knee_angle_offset_degrees 表示在原腿部夹角上增加的预弯角度；left_leg_links 与 right_leg_links 分别表示左右腿按髋、膝、脚顺序排列的节点名称。
+# 输入：quaternions 表示可选的逐帧节点朝向四元数，采用 wxyz 顺序，用于让髋部和膝部姿态跟随预弯后的腿段方向。
+# 输出：未提供 quaternions 时返回重建后的节点世界坐标；提供时返回“重建后的节点世界坐标、同步修正后的节点朝向四元数”二元组，不修改调用方传入的原数组。
 def apply_link_scales_to_positions(
 	positions: np.ndarray,
 	link_pairs: dict[str, tuple[str, str]],
@@ -1248,8 +1265,10 @@ def apply_link_scales_to_positions(
 	right_leg_links: tuple[str, str, str],
 	quaternions: np.ndarray | None = None,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+	# 复制 positions（源节点世界坐标）和可选姿态，避免在重建过程中改写调用方持有的原始动作数据。
 	scaled_positions = positions.copy()
 	scaled_quaternions = quaternions.copy() if quaternions is not None else None
+	# 按父到子的拓扑顺序，用 link_scales（目标/源长度比例）缩放原方向向量，再从已重建的父节点出发定位子节点。
 	for link_name, (parent_body, child_body) in link_pairs.items():
 		parent_idx = body_slots[parent_body]
 		child_idx = body_slots[child_body]
@@ -1264,6 +1283,7 @@ def apply_link_scales_to_positions(
 			)
 
 	# Blend knee joint by increasing knee angle and only updating foot keypoints.
+	# 在逐连杆缩放结果上定位左右腿的髋、膝、脚节点，并把配置的预弯角从度转换为后续三角计算使用的弧度。
 	blend_offset_radius = np.radians(float(knee_angle_offset_degrees))
 
 	for body_name in left_leg_links + right_leg_links:
@@ -1293,6 +1313,7 @@ def apply_link_scales_to_positions(
 	left_hip_to_foot_dir_norm = left_hip_to_foot / np.clip(left_hip_to_foot_length[:, None], 1e-8, None)
 	right_hip_to_foot_dir_norm = right_hip_to_foot / np.clip(right_hip_to_foot_length[:, None], 1e-8, None)
 
+	# 计算大腿方向与小腿方向的当前夹角，加上预弯量后通过余弦定理得到新的髋到脚距离；髋到脚的世界方向保持不变。
 	left_cos = np.sum(left_hip_to_knee * left_knee_to_foot, axis=-1) / np.clip(
 		left_hip_to_knee_length * left_knee_to_foot_length,
 		1e-8,
@@ -1335,6 +1356,7 @@ def apply_link_scales_to_positions(
 		scaled_positions[:, right_hip_idx, :]
 		+ right_hip_to_foot_dir_norm * right_hip_to_foot_blended_length[:, None]
 	)
+	# 在大腿和小腿长度不变的约束下求新的膝节点位置，并沿用原动作的弯曲平面与弯曲侧，避免膝盖翻转到另一侧。
 	left_blended_knee_pos = compute_two_bone_ik_knee_positions(
 		hip_positions=scaled_positions[:, left_hip_idx, :],
 		knee_positions=scaled_positions[:, left_knee_idx, :],
@@ -1354,6 +1376,7 @@ def apply_link_scales_to_positions(
 	scaled_positions[:, right_knee_idx, :] = right_blended_knee_pos
 
 	if scaled_quaternions is not None:
+		# scaled_quaternions 表示复制后的节点姿态；这里用预弯前后腿段之间的最小旋转同步更新髋部和膝部，脚部及其他节点姿态保持原值。
 		# Rotate the hip and knee orientations to follow the bent leg, while keeping
 		# the foot orientation untouched. The hip body follows the thigh segment
 		# (hip -> knee) and the knee body follows the shank segment (knee -> foot).
