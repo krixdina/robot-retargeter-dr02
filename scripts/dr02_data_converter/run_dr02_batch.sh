@@ -10,7 +10,8 @@ Usage:
 
 Recursively converts MotionDecode CSV files beneath DIR. DIR must be inside
 --dataset-root. Each result is mirrored below output_data and recorded in a
-concurrency-safe JSONL manifest.
+concurrency-safe JSONL manifest. Final files preserve the source CSV stem;
+path hashes are used only for internal concurrent staging.
 
 Options:
   --input-dir DIR       Directory containing input CSV files (required).
@@ -174,7 +175,7 @@ restore_preexisting() {
 }
 
 run_one() {
-    local input="$1" input_abs rel rel_parent unique keyname
+    local input="$1" input_abs rel rel_parent unique source_filename final_stem keyname
     local normalized keypoints motion npz log_path log_dir
     local stage_normalized stage_keypoints stage_motion stage_npz
     local task_stage new_dir backup_dir source_normalized source_keypoints source_motion source_npz
@@ -185,12 +186,17 @@ run_one() {
     [[ "$input_abs" == "$DATASET_ROOT_ABS" ]] && rel="$(basename "$input_abs")"
     rel_parent="$(dirname "$rel")"
     [[ "$rel_parent" == "." ]] && rel_parent=""
+    source_filename="$(basename "$rel")"
+    final_stem="${source_filename%.*}"
+    [[ -n "$final_stem" ]] || final_stem="motiondecode"
+    # The hash-based name remains internal to the shared flat staging paths.
+    # Mirrored final outputs keep the original source stem for traceability.
     unique="$(safe_name "$input_abs")"
     keyname="${unique}_from_g1"
-    normalized="${PROJECT_ROOT}/output_data/dr02_data_converter/normalized/${rel_parent:+$rel_parent/}${unique}_normalized.csv"
-    keypoints="${PROJECT_ROOT}/output_data/keypoints/DR02/${rel_parent:+$rel_parent/}${keyname}_keypoints.pkl"
-    motion="${PROJECT_ROOT}/output_data/robot_motion/${rel_parent:+$rel_parent/}${keyname}_DR02.csv"
-    npz="${PROJECT_ROOT}/output_data/dr02_data_converter/npz/${rel_parent:+$rel_parent/}${keyname}_DR02.npz"
+    normalized="${PROJECT_ROOT}/output_data/dr02_data_converter/normalized/${rel_parent:+$rel_parent/}${final_stem}_normalized.csv"
+    keypoints="${PROJECT_ROOT}/output_data/keypoints/DR02/${rel_parent:+$rel_parent/}${final_stem}_from_g1_keypoints.pkl"
+    motion="${PROJECT_ROOT}/output_data/robot_motion/${rel_parent:+$rel_parent/}${final_stem}_from_g1_DR02.csv"
+    npz="${PROJECT_ROOT}/output_data/dr02_data_converter/npz/${rel_parent:+$rel_parent/}${final_stem}_from_g1_DR02.npz"
     # Keep one immutable log per batch run.  A stable per-motion directory
     # groups all attempts for the same source CSV, while RUN_ID prevents a
     # later success/failed/skipped attempt from overwriting earlier details.
