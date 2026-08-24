@@ -191,7 +191,10 @@ run_one() {
     keypoints="${PROJECT_ROOT}/output_data/keypoints/DR02/${rel_parent:+$rel_parent/}${keyname}_keypoints.pkl"
     motion="${PROJECT_ROOT}/output_data/robot_motion/${rel_parent:+$rel_parent/}${keyname}_DR02.csv"
     npz="${PROJECT_ROOT}/output_data/dr02_data_converter/npz/${rel_parent:+$rel_parent/}${keyname}_DR02.npz"
-    log_path="${PROJECT_ROOT}/output_data/dr02_data_converter/logs/${rel_parent:+$rel_parent/}${unique}.log"
+    # Keep one immutable log per batch run.  A stable per-motion directory
+    # groups all attempts for the same source CSV, while RUN_ID prevents a
+    # later success/failed/skipped attempt from overwriting earlier details.
+    log_path="${PROJECT_ROOT}/output_data/dr02_data_converter/logs/${rel_parent:+$rel_parent/}${unique}/${RUN_ID}.log"
     log_dir="$(dirname "$log_path")"
     mkdir -p "$log_dir"
     started="$(timestamp)"; started_epoch="$(epoch_seconds)"
