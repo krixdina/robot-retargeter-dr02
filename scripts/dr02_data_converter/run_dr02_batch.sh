@@ -35,7 +35,7 @@ EOF
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-PIPELINE="${SCRIPT_DIR}/run_dr02_pipeline.sh"
+PIPELINE="${SCRIPT_DIR}/convert_single_motiondecode_to_dr02.sh"
 MANIFEST_WRITER="${SCRIPT_DIR}/dr02_batch_manifest.py"
 INPUT_DIR=""
 DATASET_ROOT="${PROJECT_ROOT}/dataset/MotionDecode/samples"

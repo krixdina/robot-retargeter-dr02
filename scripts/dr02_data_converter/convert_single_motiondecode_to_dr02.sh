@@ -5,7 +5,7 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  run_dr02_pipeline.sh --input <MotionDecode.csv> [--fps 120] [--no-viewer] [--overwrite]
+  convert_single_motiondecode_to_dr02.sh --input <MotionDecode.csv> [--fps 120] [--no-viewer] [--overwrite]
 
 Options:
   --input PATH       MotionDecode CSV to convert (required).
