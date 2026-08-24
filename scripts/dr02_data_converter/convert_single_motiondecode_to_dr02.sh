@@ -5,11 +5,13 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  convert_single_motiondecode_to_dr02.sh --input <MotionDecode.csv> [--fps 120] [--no-viewer] [--overwrite]
+  convert_single_motiondecode_to_dr02.sh --input <MotionDecode.csv> [--fps 120] [--output-name NAME] [--no-viewer] [--overwrite]
 
 Options:
   --input PATH       MotionDecode CSV to convert (required).
   --fps FPS          Source/capture frame rate passed through every stage (default: 120).
+  --output-name NAME Override the output stem (default: source CSV stem).
+                     Batch conversion uses this only for unique internal staging.
   --no-viewer        Do not open the final MuJoCo DR02 visualization window.
   --overwrite        Replace this pipeline's pre-existing outputs for the same input.
   -h, --help         Show this help text.
@@ -21,6 +23,7 @@ EOF
 
 INPUT=""
 FPS="120"
+OUTPUT_NAME=""
 NO_VIEWER=false
 OVERWRITE=false
 
@@ -34,6 +37,11 @@ while [[ $# -gt 0 ]]; do
         --fps)
             [[ $# -ge 2 ]] || { echo "[error] --fps requires a value" >&2; exit 2; }
             FPS="$2"
+            shift 2
+            ;;
+        --output-name)
+            [[ $# -ge 2 ]] || { echo "[error] --output-name requires a value" >&2; exit 2; }
+            OUTPUT_NAME="$2"
             shift 2
             ;;
         --no-viewer)
@@ -79,6 +87,15 @@ fi
 # a symlinked/non-existent input from accidentally being treated as an output.
 INPUT_ABS="$(realpath -e "${INPUT}")"
 
+if [[ -z "${OUTPUT_NAME}" ]]; then
+    SOURCE_FILENAME="$(basename "${INPUT_ABS}")"
+    OUTPUT_NAME="${SOURCE_FILENAME%.*}"
+fi
+if [[ -z "${OUTPUT_NAME}" || "${OUTPUT_NAME}" == "." || "${OUTPUT_NAME}" == ".." || "${OUTPUT_NAME}" == */* ]]; then
+    echo "[error] --output-name must be one non-empty filename component" >&2
+    exit 2
+fi
+
 if [[ -n "${PYTHON_BIN:-}" ]]; then
     : # User override has the highest priority.
 elif [[ -x "${PROJECT_ROOT}/.conda/bin/python" ]]; then
@@ -111,21 +128,7 @@ for required_file in "${ADAPTER}" "${NPZ_EXPORTER}" scripts/robot_replay.py scri
     [[ -f "${required_file}" ]] || { echo "[error] required file not found: ${required_file}" >&2; exit 1; }
 done
 
-# Prefer the part beneath MotionDecode/samples for readable names. The hash of
-# the absolute source path disambiguates identical basenames in large datasets.
-INPUT_ID="${INPUT_ABS}"
-if [[ "${INPUT_ABS}" == *"/MotionDecode/samples/"* ]]; then
-    INPUT_ID="${INPUT_ABS#*/MotionDecode/samples/}"
-fi
-SLUG="$(printf '%s' "${INPUT_ID%.csv}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
-SLUG="${SLUG:0:96}"
-[[ -n "${SLUG}" ]] || SLUG="motiondecode"
-if command -v sha256sum >/dev/null 2>&1; then
-    SHORT_HASH="$(printf '%s' "${INPUT_ABS}" | sha256sum | awk '{print substr($1, 1, 12)}')"
-else
-    SHORT_HASH="$(printf '%s' "${INPUT_ABS}" | shasum -a 256 | awk '{print substr($1, 1, 12)}')"
-fi
-SAFE_NAME="${SLUG}-${SHORT_HASH}"
+SAFE_NAME="${OUTPUT_NAME}"
 KEYPOINTS_NAME="${SAFE_NAME}_from_g1"
 
 NORMALIZED_DIR="output_data/dr02_data_converter/normalized"
@@ -155,6 +158,7 @@ fi
 echo "=== DR02 MotionDecode pipeline ==="
 echo "[info] input: ${INPUT_ABS}"
 echo "[info] fps: ${FPS}"
+echo "[info] output name: ${SAFE_NAME}"
 echo "[info] motion name: ${KEYPOINTS_NAME}"
 
 echo "[1/5] Normalize MotionDecode CSV"

@@ -250,7 +250,7 @@ run_one() {
         fi
     done
     set +e
-    "$PIPELINE" --input "$input_abs" --fps "$FPS" --no-viewer --overwrite >"$log_path" 2>&1
+    "$PIPELINE" --input "$input_abs" --fps "$FPS" --output-name "$unique" --no-viewer --overwrite >"$log_path" 2>&1
     exit_code=$?
     set -e
     if (( exit_code == 0 )) && [[ -f "$stage_normalized" && -f "$stage_keypoints" && -f "$stage_motion" && -f "$stage_npz" ]]; then
