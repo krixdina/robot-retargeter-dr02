@@ -167,6 +167,10 @@ def build_combined_spec(robots: list[str]) -> mujoco.MjSpec:
 
     for robot in robots:
         robot_spec = mujoco.MjSpec.from_file(get_robot_xml(robot))
+        # Global model options are inherited from the parent spec during attach.
+        # Match the child value explicitly so MuJoCo does not warn about a
+        # conflict whose resolution would keep this same parent value anyway.
+        robot_spec.option.integrator = spec.option.integrator
         for j in robot_spec.joints:
             if j.type == mujoco.mjtJoint.mjJNT_FREE:
                 j.name = "floating_base_joint"
