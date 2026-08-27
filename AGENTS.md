@@ -10,6 +10,7 @@ If this round of work produces any functional code changes, create a git commit 
 - Use a concise English commit message that accurately describes the main change.
 - If multiple related changes happen in the same round, combine them into one commit.
 - If changes are incomplete, blocked, or not yet coherent, explain the reason instead of forcing a bad commit.
+- **Exception for Explicit User-Requested Commits:** If the user explicitly asks for a Git commit, first summarize all currently uncommitted changes, then commit all of those changes. This exception takes precedence over the comment-only exception above.
 
 ## Commit message format (For functional code changes only)
 <类型>: <本轮修改摘要>

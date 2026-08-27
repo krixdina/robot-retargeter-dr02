@@ -12,3 +12,281 @@ scripts/dr02_data_converter/run_dr02_batch.sh \
   --fps 120 \
   --jobs 4
 ```
+### 重定向数据展示
+```
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv \
+  dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
+  --target-csv \
+  output_data/robot_motion/4-martial-arts-muay-thai-ma-muay-thai-e6e16bd6cfe7_from_g1_DR02.csv \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 120
+
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv \
+  dataset/MotionDecode/samples/1.1.Basic_Movement_Category/1.1.1.High_Dynamic_Movement/1.1.1.1.Standing_High_Jump/BM_Standing_High_Jump_00092.csv \
+  --target-csv \
+  output_data/robot_motion/1.1.Basic_Movement_Category/1.1.1.High_Dynamic_Movement/1.1.1.1.Standing_High_Jump/1-1-basic-movement-category-1-1-1-high-dynamic-movement-1-1-1-1-standing-high-jump-bm-standing-h-0010fca813c7_from_g1_DR02.csv \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+```
+### 25 条明显关节异常动作：重定向前后对比
+
+说明：以下动作按自动 QA 严重程度排序。G1 位于 +Y，DR02 位于 -Y；播放到每条命令标注的重点时间后按空格暂停，再用 `,` / `.` 逐帧检查。
+
+```bash
+# [01] 武术：MA_Eagle_Claw_Fist_2
+# 重点观察：t=22.208s，frame=2665；right_shoulder_z_joint 连续贴限 1819 帧；手臂 P95=25.5cm/141.3°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Eagle_Claw_Fist_2/MA_Eagle_Claw_Fist_2.csv' \
+  --target-csv 'output_data/robot_motion/qa06_eagle_claw_fist_2_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [02] 球类：BGI_Serve_00155
+# 重点观察：t=6.175s，frame=741；left_shoulder_z_joint 连续贴限 497 帧；手臂 P95=10.0cm/161.0°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/3.3.Ball_Game_Interaction/3.3.6.Tennis/3.3.6.3.Serve/BGI_Serve_00155.csv' \
+  --target-csv 'output_data/robot_motion/qa23_tennis_serve_155_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [03] 球类：BGI_Smash_00221
+# 重点观察：t=5.933s，frame=712；left_shoulder_z_joint 连续贴限 413 帧；手臂 P95=10.8cm/156.0°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/3.3.Ball_Game_Interaction/3.3.2.Badminton/3.3.2.2.Smash/BGI_Smash_00221.csv' \
+  --target-csv 'output_data/robot_motion/qa24_badminton_smash_221_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [04] 武术：MA_Long_Fist_3
+# 重点观察：t=47.975s，frame=5757；left_shoulder_z_joint 连续贴限 480 帧；手臂 P95=10.6cm/87.9°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Long_Fist_3/MA_Long_Fist_3.csv' \
+  --target-csv 'output_data/robot_motion/qa02_long_fist_3_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [05] 球类：BGI_Serve_00005
+# 重点观察：t=8.742s，frame=1049；left_shoulder_z_joint 连续贴限 800 帧；手臂 P95=11.3cm/163.6°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/3.3.Ball_Game_Interaction/3.3.6.Tennis/3.3.6.3.Serve/BGI_Serve_00005.csv' \
+  --target-csv 'output_data/robot_motion/qa22_tennis_serve_05_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [06] 舞蹈：DAN_havana
+# 重点观察：t=67.708s，frame=8125；right_shoulder_z_joint 连续贴限 775 帧；手臂 P95=8.7cm/44.0°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/5.Dance/5.3.Pop_Dance/20260108/havana/DAN_havana.csv' \
+  --target-csv 'output_data/robot_motion/qa18_havana_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [07] 武术：MA_Muay_Thai
+# 重点观察：t=29.567s，frame=3548；left_shoulder_z_joint 连续贴限 1141 帧；手臂 P95=8.8cm/90.6°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv' \
+  --target-csv 'output_data/robot_motion/qa01_muay_thai_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [08] 武术：MA_wubuquan_1
+# 重点观察：t=20.717s，frame=2486；left_shoulder_z_joint 连续贴限 437 帧；手臂 P95=9.8cm/78.4°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/wubuquan_1/MA_wubuquan_1.csv' \
+  --target-csv 'output_data/robot_motion/qa04_wubuquan_1_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [09] 情绪/表演：EESB_Intense_Joy_00058
+# 重点观察：t=20.800s，frame=2496；left_shoulder_z_joint 连续贴限 426 帧；手臂 P95=8.8cm/77.6°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/1.10.Emotional_Expressions_and_Social_Behaviors/1.10.6.Dramatic_Emotional_Gestures/1.10.6.3.Intense_Joy/EESB_Intense_Joy_00058.csv' \
+  --target-csv 'output_data/robot_motion/qa26_intense_joy_58_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [10] 球类：BGI_Spike_00112
+# 重点观察：t=7.658s，frame=919；left_shoulder_z_joint 连续贴限 537 帧；手臂 P95=8.5cm/159.4°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/3.3.Ball_Game_Interaction/3.3.4.Volleyball/3.3.4.3.Spike/BGI_Spike_00112.csv' \
+  --target-csv 'output_data/robot_motion/qa20_volleyball_spike_112_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [11] 舞蹈：DAN_bad
+# 重点观察：t=68.900s，frame=8268；left_shoulder_z_joint 连续贴限 560 帧；手臂 P95=8.6cm/72.0°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/5.Dance/5.3.Pop_Dance/20260327/bad/DAN_bad.csv' \
+  --target-csv 'output_data/robot_motion/qa12_bad_dance_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [12] 武术：MA_Long_Fist_2
+# 重点观察：t=37.575s，frame=4509；right_shoulder_y_joint 连续贴限 413 帧；手臂 P95=8.7cm/23.6°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Long_Fist_2/MA_Long_Fist_2.csv' \
+  --target-csv 'output_data/robot_motion/qa07_long_fist_2_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [13] 情绪/表演：EESB_Intense_Joy_00041
+# 重点观察：t=15.183s，frame=1822；right_shoulder_y_joint 连续贴限 659 帧；手臂 P95=6.5cm/20.4°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/1.10.Emotional_Expressions_and_Social_Behaviors/1.10.6.Dramatic_Emotional_Gestures/1.10.6.3.Intense_Joy/EESB_Intense_Joy_00041.csv' \
+  --target-csv 'output_data/robot_motion/qa30_intense_joy_41_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [14] 情绪/表演：EESB_Theatrical_Exaggerated_Emo_00018
+# 重点观察：t=37.400s，frame=4488；left_shoulder_z_joint 连续贴限 666 帧；手臂 P95=7.3cm/67.0°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/1.10.Emotional_Expressions_and_Social_Behaviors/1.10.8.Performative_Emotions/1.10.8.1.Theatrical_Exaggerated_Emo/EESB_Theatrical_Exaggerated_Emo_00018.csv' \
+  --target-csv 'output_data/robot_motion/qa27_theatrical_emotion_18_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [15] 舞蹈：DAN_cheating_on_you
+# 重点观察：t=44.217s，frame=5306；left_shoulder_y_joint 连续贴限 534 帧；手臂 P95=6.8cm/34.2°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/5.Dance/5.3.Pop_Dance/20260327/cheating_on_you/DAN_cheating_on_you.csv' \
+  --target-csv 'output_data/robot_motion/qa16_cheating_on_you_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [16] 球类：BGI_Spike_00171
+# 重点观察：t=6.842s，frame=821；left_shoulder_z_joint 连续贴限 584 帧；手臂 P95=8.3cm/165.6°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/3.3.Ball_Game_Interaction/3.3.4.Volleyball/3.3.4.3.Spike/BGI_Spike_00171.csv' \
+  --target-csv 'output_data/robot_motion/qa25_volleyball_spike_171_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [17] 武术：MA_Long_Fist_11
+# 重点观察：t=13.167s，frame=1580；left_shoulder_z_joint 连续贴限 241 帧；手臂 P95=9.7cm/78.9°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Long_Fist_11/MA_Long_Fist_11.csv' \
+  --target-csv 'output_data/robot_motion/qa05_long_fist_11_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [18] 舞蹈：DAN_the_girls
+# 重点观察：t=37.117s，frame=4454；left_shoulder_z_joint 连续贴限 332 帧；手臂 P95=6.5cm/30.1°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/5.Dance/5.3.Pop_Dance/D0325/the_girls/DAN_the_girls.csv' \
+  --target-csv 'output_data/robot_motion/qa13_the_girls_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [19] 舞蹈：DAN_light_rain
+# 重点观察：t=16.258s，frame=1951；left_shoulder_z_joint 连续贴限 253 帧；手臂 P95=7.8cm/31.4°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/5.Dance/5.3.Pop_Dance/D0325/light_rain/DAN_light_rain.csv' \
+  --target-csv 'output_data/robot_motion/qa15_light_rain_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [20] 球类：BGI_Spike_00087
+# 重点观察：t=6.883s，frame=826；left_shoulder_z_joint 连续贴限 631 帧；手臂 P95=7.6cm/161.7°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/3.3.Ball_Game_Interaction/3.3.4.Volleyball/3.3.4.3.Spike/BGI_Spike_00087.csv' \
+  --target-csv 'output_data/robot_motion/qa21_volleyball_spike_87_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [21] 武术：MA_Tiger_Fist_8
+# 重点观察：t=3.683s，frame=442；right_shoulder_z_joint 连续贴限 233 帧；手臂 P95=8.8cm/32.4°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Tiger_Fist_8/MA_Tiger_Fist_8.csv' \
+  --target-csv 'output_data/robot_motion/qa03_tiger_fist_8_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [22] 武术：MA_Mantis_Fist_1
+# 重点观察：t=12.017s，frame=1442；right_shoulder_z_joint 连续贴限 233 帧；手臂 P95=8.5cm/35.5°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Mantis_Fist_1/MA_Mantis_Fist_1.csv' \
+  --target-csv 'output_data/robot_motion/qa11_mantis_fist_1_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [23] 舞蹈：DAN_lips_hips_kiss
+# 重点观察：t=13.158s，frame=1579；right_shoulder_z_joint 连续贴限 142 帧；手臂 P95=6.1cm/21.1°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/5.Dance/5.3.Pop_Dance/D0325/lips_hips_kiss/DAN_lips_hips_kiss.csv' \
+  --target-csv 'output_data/robot_motion/qa14_lips_hips_kiss_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [24] 舞蹈：DAN_running
+# 重点观察：t=96.833s，frame=11620；right_shoulder_z_joint 连续贴限 240 帧；手臂 P95=6.0cm/20.4°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/5.Dance/5.3.Pop_Dance/D0403/running/DAN_running.csv' \
+  --target-csv 'output_data/robot_motion/qa17_running_dance_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+# [25] 武术：MA_Long_Fist_6
+# 重点观察：t=10.300s，frame=1236；right_elbow_joint 连续贴限 133 帧；手臂 P95=6.4cm/20.4°
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Long_Fist_6/MA_Long_Fist_6.csv' \
+  --target-csv 'output_data/robot_motion/qa09_long_fist_6_from_g1_DR02.csv' \
+  --source-fps 120 \
+  --target-fps 120 \
+  --render-fps 60
+
+```
