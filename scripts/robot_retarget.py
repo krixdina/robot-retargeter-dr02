@@ -253,6 +253,7 @@ class RobotRetarget:
         self.setup_retarget_configuration()
         # 读取上游流程写出的关键点 pkl 文件，并准备后续逐帧 IK 所需的位姿、接触和时间信息。
         self.load_keypoints()
+        # 设置接触约束
         self.setup_contact_targets()
         # Posture regularization should guide the QP but not change the legacy
         # task-error stopping criterion.
