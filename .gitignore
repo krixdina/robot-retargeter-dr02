@@ -41,6 +41,7 @@ output_data/
 # ---- Logs / temp ----
 *.log
 *.tmp
+*.zip
 MUJOCO_LOG.TXT
 
 view_mjcf.py
