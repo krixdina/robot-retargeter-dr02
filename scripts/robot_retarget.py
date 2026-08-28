@@ -27,6 +27,7 @@ import csv
 import copy
 import os
 import glfw
+from collections.abc import Mapping, Sequence
 from tqdm import tqdm
 from scipy.spatial.transform import Rotation as Rot
 
@@ -34,6 +35,120 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Global pause state and keyboard callback
 _PAUSED = False
+
+DEFAULT_TEMPORAL_JOINT_SUBSTRINGS = ("shoulder", "elbow")
+
+
+def _joint_dof_width(joint_type):
+    """Return the MuJoCo tangent-space width of one joint."""
+    if joint_type == mujoco.mjtJoint.mjJNT_FREE:
+        return 6
+    if joint_type == mujoco.mjtJoint.mjJNT_BALL:
+        return 3
+    return 1
+
+
+def _finite_number(value, setting_name, strictly_positive=False):
+    """Validate a scalar numeric YAML value and return it as a float."""
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{setting_name} must be a finite number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{setting_name} must be a finite number") from error
+    if not np.isfinite(number):
+        raise ValueError(f"{setting_name} must be a finite number")
+    if strictly_positive and number <= 0.0:
+        raise ValueError(f"{setting_name} must be > 0")
+    return number
+
+
+def _enabled_flag(config, setting_name):
+    """Read an optional YAML switch without accepting truthy non-boolean values."""
+    enabled = config.get("enabled", False)
+    if not isinstance(enabled, (bool, np.bool_)):
+        raise ValueError(f"{setting_name}.enabled must be a bool")
+    return bool(enabled)
+
+
+def _joint_dof_indices_for_substrings(model, substrings, setting_name):
+    """Return non-free DoF indices selected by configured joint-name substrings."""
+    if not isinstance(substrings, Sequence) or isinstance(substrings, (str, bytes)):
+        raise ValueError(f"{setting_name}.joint_name_substrings must be a list of strings")
+    if not substrings:
+        raise ValueError(f"{setting_name}.joint_name_substrings must not be empty")
+
+    indices = []
+    for substring in substrings:
+        if not isinstance(substring, str) or not substring:
+            raise ValueError(f"{setting_name}.joint_name_substrings must contain non-empty strings")
+        matched = False
+        for joint_id in range(model.njnt):
+            joint_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+            if joint_name is None or substring not in joint_name:
+                continue
+            if model.jnt_type[joint_id] == mujoco.mjtJoint.mjJNT_FREE:
+                continue
+            dof_start = model.jnt_dofadr[joint_id]
+            dof_end = dof_start + _joint_dof_width(model.jnt_type[joint_id])
+            indices.extend(range(dof_start, dof_end))
+            matched = True
+        if not matched:
+            raise ValueError(
+                f"{setting_name}.joint_name_substrings contains unknown joint substring: {substring!r}"
+            )
+    return np.asarray(sorted(set(indices)), dtype=int)
+
+
+class FrameVelocityLimit(mink.Limit):
+    """Per-data-frame displacement budget for configured non-free joint DoFs.
+
+    ``begin_frame`` fixes the qpos anchor.  Each QP then receives only the
+    remaining part of ``max_velocity / fps``; unlike ``mink.VelocityLimit``,
+    repeated IK iterations cannot exceed the frame-wide budget.
+
+    Free joints (including a floating base) are deliberately not selected by
+    this feature, matching Mink's ``VelocityLimit`` joint-velocity semantics.
+    """
+
+    def __init__(self, model, indices, max_velocities, fps):
+        fps = _finite_number(fps, "inter_frame_velocity_limit.fps", strictly_positive=True)
+        self.model = model
+        self.indices = np.asarray(indices, dtype=int)
+        self.max_velocities = np.asarray(max_velocities, dtype=float)
+        if self.indices.ndim != 1 or self.max_velocities.shape != self.indices.shape:
+            raise ValueError("FrameVelocityLimit indices and max_velocities must have matching shapes")
+        if not np.all(np.isfinite(self.max_velocities)) or np.any(self.max_velocities <= 0.0):
+            raise ValueError("inter_frame_velocity_limit velocities must be finite and > 0")
+        self.projection_matrix = np.eye(model.nv)[self.indices]
+        self.frame_budget = self.max_velocities / fps
+        self.previous_q = None
+
+    def begin_frame(self, previous_q):
+        previous_q = np.asarray(previous_q, dtype=float)
+        if previous_q.shape != (self.model.nq,):
+            raise ValueError(
+                f"FrameVelocityLimit previous_q must have shape ({self.model.nq},), got {previous_q.shape}"
+            )
+        self.previous_q = previous_q.copy()
+
+    def compute_qp_inequalities(self, configuration, dt):
+        del dt  # The budget is defined by source-data fps, not IK integration dt.
+        if self.previous_q is None:
+            raise RuntimeError("FrameVelocityLimit.begin_frame must be called before solve_ik")
+        used_displacement = np.empty(self.model.nv)
+        mujoco.mj_differentiatePos(
+            self.model,
+            used_displacement,
+            1.0,
+            self.previous_q,
+            configuration.q,
+        )
+        used = used_displacement[self.indices]
+        # G * delta_q <= h.  Both signs make the remaining frame budget explicit.
+        G = np.vstack([self.projection_matrix, -self.projection_matrix])
+        h = np.hstack([self.frame_budget - used, self.frame_budget + used])
+        return mink.Constraint(G=G, h=h)
 
 
 def parse_args() -> argparse.Namespace:
@@ -100,6 +215,8 @@ class RobotRetarget:
         joints_limit_offset_degrees: dict | None = None,
         contact_body_names: list | tuple | dict | None = None,
         contact_position_cost: float = 10.0,
+        temporal_continuity_regularization: dict | None = None,
+        inter_frame_velocity_limit: dict | None = None,
     ):
         self.xml_file = model_path
         self.keypoint_path = keypoint_path
@@ -112,17 +229,23 @@ class RobotRetarget:
         self.joints_limit_offset_degrees = joints_limit_offset_degrees or {}
         self.contact_body_names = self._normalize_contact_body_names(contact_body_names)
         self.contact_position_cost = float(contact_position_cost)
+        self.temporal_continuity_regularization = temporal_continuity_regularization
+        self.inter_frame_velocity_limit_config = inter_frame_velocity_limit
         self.verbose = verbose
         self.solver = solver
         self.human_body_to_task = {}
         self.task_errors = {}
         self.result_pos = []
+        self.frame_ik_iteration_counts = []
         self.contact_state_name_to_idx = {}
         self.keypoint_name_to_idx = {}
         self.body_name_to_source_keypoint = {}
         self.body_name_to_contact_task = {}
         self.contact_targets = []
         self.current_contact_points = []
+        self.temporal_posture_task = None
+        self.frame_velocity_limit = None
+        self.convergence_tasks = []
 
         self.robot_motor_names = {}
 
@@ -131,6 +254,11 @@ class RobotRetarget:
         # 读取上游流程写出的关键点 pkl 文件，并准备后续逐帧 IK 所需的位姿、接触和时间信息。
         self.load_keypoints()
         self.setup_contact_targets()
+        # Posture regularization should guide the QP but not change the legacy
+        # task-error stopping criterion.
+        self.convergence_tasks = list(self.tasks)
+        # 建立可选的时间连续性任务与帧间硬速度约束；缺省配置保持旧行为。
+        self.setup_temporal_constraints()
 
     def _normalize_contact_body_names(self, contact_body_names):
         if contact_body_names is None:
@@ -241,7 +369,7 @@ class RobotRetarget:
         }
         self.contact_seq = keypoints_data["contact_states"]
         # 使用文件记录的帧率；旧数据未记录时按 30 FPS 解释，并由位置数组的形状确定总帧数和关键点数。
-        self.fps = keypoints_data.get("fps", 30)
+        self.fps = _finite_number(keypoints_data.get("fps", 30), "keypoints fps", strictly_positive=True)
         self.time_step = 1.0 / self.fps
         self.num_frames = self.keypoints_pos.shape[0]
         self.num_keypoints = self.keypoints_pos.shape[1]
@@ -280,6 +408,72 @@ class RobotRetarget:
                 self.robot_frame_names.append(robot_frame)
                 self.task_errors[task] = []
         pass
+
+    def setup_temporal_constraints(self):
+        """Create optional temporal IK terms after source fps is available."""
+        temporal_config = self.temporal_continuity_regularization
+        if temporal_config is not None:
+            if not isinstance(temporal_config, Mapping):
+                raise ValueError("temporal_continuity_regularization must be a mapping")
+            if _enabled_flag(temporal_config, "temporal_continuity_regularization"):
+                if "cost" not in temporal_config:
+                    raise ValueError("temporal_continuity_regularization.cost is required when enabled")
+                cost = _finite_number(
+                    temporal_config["cost"],
+                    "temporal_continuity_regularization.cost",
+                    strictly_positive=True,
+                )
+                indices = _joint_dof_indices_for_substrings(
+                    self.model,
+                    temporal_config.get("joint_name_substrings", DEFAULT_TEMPORAL_JOINT_SUBSTRINGS),
+                    "temporal_continuity_regularization",
+                )
+                posture_cost = np.zeros(self.model.nv)
+                posture_cost[indices] = cost
+                self.temporal_posture_task = mink.PostureTask(self.model, cost=posture_cost)
+                self.tasks.append(self.temporal_posture_task)
+
+        velocity_config = self.inter_frame_velocity_limit_config
+        if velocity_config is not None:
+            if not isinstance(velocity_config, Mapping):
+                raise ValueError("inter_frame_velocity_limit must be a mapping")
+            if _enabled_flag(velocity_config, "inter_frame_velocity_limit"):
+                velocity_by_substring = velocity_config.get("joint_velocity_limits")
+                if not isinstance(velocity_by_substring, Mapping) or not velocity_by_substring:
+                    raise ValueError(
+                        "inter_frame_velocity_limit.joint_velocity_limits must be a non-empty mapping"
+                    )
+                indices = []
+                max_velocities = []
+                for substring, max_velocity in velocity_by_substring.items():
+                    max_velocity = _finite_number(
+                        max_velocity,
+                        "inter_frame_velocity_limit.joint_velocity_limits values",
+                        strictly_positive=True,
+                    )
+                    matched_indices = _joint_dof_indices_for_substrings(
+                        self.model,
+                        [substring],
+                        "inter_frame_velocity_limit",
+                    )
+                    indices.extend(matched_indices.tolist())
+                    max_velocities.extend([max_velocity] * len(matched_indices))
+                # Repeated substring matches are ambiguous, so reject them instead of silently picking one.
+                if len(set(indices)) != len(indices):
+                    raise ValueError("inter_frame_velocity_limit joint substrings must not overlap")
+                self.frame_velocity_limit = FrameVelocityLimit(
+                    self.model, indices, max_velocities, self.fps
+                )
+                self.ik_limits.append(self.frame_velocity_limit)
+
+    def begin_temporal_frame(self):
+        """Anchor all temporal terms to the final qpos of the preceding data frame."""
+        previous_q = self.configuration.q.copy()
+        if self.temporal_posture_task is not None:
+            # Mink cost c is squared in its least-squares objective; target is fixed per frame.
+            self.temporal_posture_task.set_target(previous_q)
+        if self.frame_velocity_limit is not None:
+            self.frame_velocity_limit.begin_frame(previous_q)
 
     # 用途：为可识别的接触 body 预先创建位置锁定任务，并保存每段连续接触所需的固定目标位置。
     # 不直接返回数值；会向 self.contact_targets（接触约束描述的列表）加入可用接触项，并将对应的位置任务加入总 IK 任务集合。
@@ -508,7 +702,7 @@ class RobotRetarget:
     def error(self):
         return np.linalg.norm(
             np.concatenate(
-                [task.compute_error(self.configuration) for task in self.tasks]
+                [task.compute_error(self.configuration) for task in self.convergence_tasks]
             )
         )
     
@@ -677,6 +871,7 @@ class RobotRetarget:
             for frame_idx in tqdm(range(self.num_frames), desc="Retargeting", unit="frame"):
                 start_time = time.time()
                 self.update_targets(frame_idx)
+                self.begin_temporal_frame()
 
                 # 记录更新前所有普通关键点与接触任务的未加权总误差，作为本轮迭代的比较基准。
                 curr_error = self.error()
@@ -702,6 +897,7 @@ class RobotRetarget:
                     self.configuration.integrate_inplace(vel, dt)
                     next_error = self.error()
                     num_iter += 1
+                self.frame_ik_iteration_counts.append(num_iter + 1)
                 # 复制当前帧的完整广义位置，避免后续帧的原地积分改写已经保存的历史结果。
                 curr_pos = self.configuration.data.qpos.copy()
                 self.result_pos.append(curr_pos)
@@ -803,6 +999,8 @@ if  __name__ == "__main__":
             for field_name in RobotRetarget.LEGACY_CONTACT_CONFIG_TO_NAMES
         }
     contact_position_cost = config.get("contact_pos_fixed_factor", 10.0)
+    temporal_continuity_regularization = config.get("temporal_continuity_regularization")
+    inter_frame_velocity_limit = config.get("inter_frame_velocity_limit")
     
     # 初始化重定向器：加载目标机器人、关键点序列，并建立逐帧 IK 与接触锁定约束。
     robot_retarget = RobotRetarget(
@@ -815,6 +1013,8 @@ if  __name__ == "__main__":
         joints_limit_offset_degrees=joints_limit_offset_degrees,
         contact_body_names=contact_body_names,
         contact_position_cost=contact_position_cost,
+        temporal_continuity_regularization=temporal_continuity_regularization,
+        inter_frame_velocity_limit=inter_frame_velocity_limit,
     )
 
     # 对每一帧关键点求解目标机器人姿态，求解结果保存在重定向器的内存结果序列中。

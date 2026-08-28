@@ -1,0 +1,46 @@
+# Review/smoke configuration derived from DR02.yaml.  DR02.yaml itself remains unchanged.
+robot_xml_path: "asset/robot/DR02/mjcf/pro/DR02_pro.xml"
+verbose: False
+render_debug: False
+keypoints_path: "output_data/keypoints/DR02/MA_Muay_Thai_from_g1_keypoints.pkl"
+
+joints_limit_offset_degrees:
+  knee_joint: [10.0, 0.0]
+  elbow_joint: [10.0, 0.0]
+
+contact_links: [left_foot_end_link, left_toe_link,
+                right_foot_end_link, right_toe_link,
+                left_hand_link, right_hand_link]
+
+ik_match_table: {
+  "hips_mean": ["base_link", 100, 0],
+  "left_hip": ["left_hip_x_link", 30, 3],
+  "left_thigh": ["left_knee_link", 0.0, 3.0],
+  "left_calf": ["left_ankle_x_link", 30, 3],
+  "right_hip": ["right_hip_x_link", 30, 3],
+  "right_thigh": ["right_knee_link", 0.0, 3.0],
+  "right_calf": ["right_ankle_x_link", 30, 3],
+  "head": ["head_link", 0.0, 3.0],
+  "left_shoulder": ["left_shoulder_x_link", 30, 3],
+  "left_arm": ["left_elbow_link", 10.0, 3],
+  "left_fore_arm": ["left_hand_link", 10, 1],
+  "right_shoulder": ["right_shoulder_x_link", 30, 3],
+  "right_arm": ["right_elbow_link", 10.0, 3],
+  "right_fore_arm": ["right_hand_link", 10, 1]
+}
+
+contact_pos_fixed_factor: 15.0
+
+# Mink uses c^2 in the posture least-squares objective. These test-only explicit
+# switches constrain only selected non-free joints; the floating-base freejoint
+# is intentionally not covered. Absent fields in existing robot YAMLs disable both.
+temporal_continuity_regularization:
+  enabled: true
+  cost: 0.05
+  joint_name_substrings: ["shoulder", "elbow"]
+
+inter_frame_velocity_limit:
+  enabled: true
+  joint_velocity_limits:
+    shoulder: 4.0
+    elbow: 4.0
