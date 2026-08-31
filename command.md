@@ -11,6 +11,37 @@ scripts/dr02_data_converter/convert_single_motiondecode_to_dr02.sh \
   --overwrite
 ```
 
+## DR02 两阶段 coarse-to-fine IK 测试
+
+下面的独立测试流水线使用 `config/robot/DR02_two_stage_optimization_test.yaml`，不会修改或启用普通 `DR02.yaml`。默认在最后打开 MuJoCo，同时显示 G1（+Y）与重定向后的 DR02（-Y）。
+
+```bash
+PYTHON_BIN=/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  bash scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_two_stage_optimization.sh \
+  --input 'dataset/MotionDecode/samples/4.Martial_Arts/Eagle_Claw_Fist_2/MA_Eagle_Claw_Fist_2.csv' \
+  --fps 120 \
+  --output-name eagle_claw_fist_2_two_stage
+```
+
+- `--input PATH`：必填，MotionDecode 的 G1 CSV。
+- `--fps FPS`：各阶段共同使用的源帧率，默认 `120`。
+- `--output-name NAME`：可选的输出文件名 stem；缺省时采用输入 CSV 文件名。必须是单个文件名，不能包含 `/`。
+- `--no-compare`：仅完成 adapter、关键点、两阶段 IK 与 NPZ 导出，不打开最终 G1/DR02 MuJoCo 对比窗口；`--no-viewer` 是兼容别名。
+- `--overwrite`：允许替换该独立 two-stage 测试目录内同名的输出。
+- `PYTHON_BIN`：可选环境变量，用于指定 Python 解释器。
+
+二阶段开关与粗阶段收敛参数位于 `two_stage_optimization`：`enabled` 控制是否运行粗阶段，`coarse.max_iterations` 和 `coarse.convergence_threshold` 控制其停止条件。粗阶段只使用 YAML 明列的 `coarse.ik_match_table` FrameTask 和基础关节限位；细阶段继续使用项目原有 `ik_match_table`、接触锁定、时间连续性正则及帧间速度硬约束。
+
+对已生成的结果进行非 GUI 校验：
+
+```bash
+/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
+  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Eagle_Claw_Fist_2/MA_Eagle_Claw_Fist_2.csv' \
+  --target-csv 'output_data/robot_motion/eagle_claw_fist_2_two_stage_from_g1_DR02_two_stage_optimization_test.csv' \
+  --source-fps 120 --target-fps 120 --render-fps 120 --validate-only
+```
+
 关闭转换后的对照查看器（适合批处理或无图形界面环境）：
 
 ```bash

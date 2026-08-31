@@ -150,7 +150,7 @@ class TemporalConstraintTest(unittest.TestCase):
                 fps=float("nan"),
             )
 
-    def test_dr02_test_yaml_selects_eight_non_free_arm_dofs(self):
+    def test_dr02_test_yaml_selects_all_configured_non_free_arm_dofs(self):
         config_path = PROJECT_ROOT / "config/robot/DR02_temporal_constraints_test.yaml"
         with config_path.open() as stream:
             config = yaml.safe_load(stream)
@@ -165,7 +165,8 @@ class TemporalConstraintTest(unittest.TestCase):
         owner.temporal_posture_task = None
         owner.frame_velocity_limit = None
         owner.setup_temporal_constraints()
-        self.assertEqual(np.count_nonzero(owner.temporal_posture_task.cost), 8)
+        # The checked-in test YAML explicitly includes shoulder, elbow, and wrist.
+        self.assertEqual(np.count_nonzero(owner.temporal_posture_task.cost), 14)
         self.assertEqual(len(owner.frame_velocity_limit.indices), 8)
         self.assertTrue(np.all(owner.frame_velocity_limit.indices >= 6))
 

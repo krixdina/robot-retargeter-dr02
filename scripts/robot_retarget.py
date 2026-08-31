@@ -247,6 +247,7 @@ class RobotRetarget:
         contact_position_cost: float = 10.0,
         temporal_continuity_regularization: dict | None = None,
         inter_frame_velocity_limit: dict | None = None,
+        two_stage_optimization: dict | None = None,
     ):
         self.xml_file = model_path
         self.keypoint_path = keypoint_path
@@ -261,6 +262,7 @@ class RobotRetarget:
         self.contact_position_cost = float(contact_position_cost)
         self.temporal_continuity_regularization = temporal_continuity_regularization
         self.inter_frame_velocity_limit_config = inter_frame_velocity_limit
+        self.two_stage_optimization_config = two_stage_optimization
         self.verbose = verbose
         self.solver = solver
         self.human_body_to_task = {}
@@ -275,6 +277,12 @@ class RobotRetarget:
         self.current_contact_points = []
         self.temporal_posture_task = None
         self.frame_velocity_limit = None
+        self.two_stage_enabled = False
+        self.coarse_tasks = []
+        self.coarse_human_body_to_task = {}
+        self.coarse_ik_limits = []
+        self.coarse_max_iter = 0
+        self.coarse_convergence_threshold = 0.001
         self.convergence_tasks = []
 
         self.robot_motor_names = {}
@@ -291,6 +299,9 @@ class RobotRetarget:
         self.convergence_tasks = list(self.tasks)
         # 建立可选的时间连续性任务与帧间硬速度约束；缺省配置保持旧行为。
         self.setup_temporal_constraints()
+        # This is deliberately last: the coarse stage is isolated from fine-stage
+        # contact, temporal-posture, and velocity-limit objects.
+        self.setup_two_stage_optimization()
 
     def _normalize_contact_body_names(self, contact_body_names):
         if contact_body_names is None:
@@ -440,6 +451,116 @@ class RobotRetarget:
                 self.robot_frame_names.append(robot_frame)
                 self.task_errors[task] = []
         pass
+
+    def setup_two_stage_optimization(self):
+        """Build the optional GMR-style coarse IK stage without fine-stage extras."""
+        config = self.two_stage_optimization_config
+        if config is None:
+            return
+        if not isinstance(config, Mapping):
+            raise ValueError("two_stage_optimization must be a mapping")
+        if not _enabled_flag(config, "two_stage_optimization"):
+            return
+
+        coarse_config = config.get("coarse")
+        if not isinstance(coarse_config, Mapping):
+            raise ValueError("two_stage_optimization.coarse must be a mapping when enabled")
+        match_table = coarse_config.get("ik_match_table")
+        if not isinstance(match_table, Mapping) or not match_table:
+            raise ValueError(
+                "two_stage_optimization.coarse.ik_match_table must be a non-empty mapping"
+            )
+        self.coarse_max_iter = int(
+            _finite_number(
+                coarse_config.get("max_iterations"),
+                "two_stage_optimization.coarse.max_iterations",
+                strictly_positive=True,
+            )
+        )
+        if self.coarse_max_iter != coarse_config.get("max_iterations"):
+            raise ValueError("two_stage_optimization.coarse.max_iterations must be an integer")
+        self.coarse_convergence_threshold = _finite_number(
+            coarse_config.get("convergence_threshold"),
+            "two_stage_optimization.coarse.convergence_threshold",
+            strictly_positive=True,
+        )
+
+        for keypoint_name, entry in match_table.items():
+            if keypoint_name not in self.keypoint_name_to_idx:
+                raise ValueError(
+                    "two_stage_optimization.coarse.ik_match_table contains unknown "
+                    f"keypoint: {keypoint_name!r}"
+                )
+            if not isinstance(entry, Sequence) or isinstance(entry, (str, bytes)) or len(entry) != 3:
+                raise ValueError(
+                    "two_stage_optimization.coarse.ik_match_table entries must be "
+                    "[body_name, position_cost, orientation_cost]"
+                )
+            frame_name, position_cost, orientation_cost = entry
+            if not isinstance(frame_name, str) or not frame_name:
+                raise ValueError("two_stage_optimization.coarse body names must be non-empty strings")
+            if mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, frame_name) < 0:
+                raise ValueError(
+                    "two_stage_optimization.coarse.ik_match_table contains unknown "
+                    f"robot body: {frame_name!r}"
+                )
+            position_cost = _finite_number(
+                position_cost,
+                f"two_stage_optimization.coarse.ik_match_table[{keypoint_name!r}] position_cost",
+            )
+            orientation_cost = _finite_number(
+                orientation_cost,
+                f"two_stage_optimization.coarse.ik_match_table[{keypoint_name!r}] orientation_cost",
+            )
+            if position_cost < 0.0 or orientation_cost < 0.0:
+                raise ValueError("two_stage_optimization.coarse task costs must be >= 0")
+            if position_cost == 0.0 and orientation_cost == 0.0:
+                raise ValueError("two_stage_optimization.coarse tasks must have a non-zero cost")
+            task = mink.FrameTask(
+                frame_name=frame_name,
+                frame_type="body",
+                position_cost=position_cost,
+                orientation_cost=orientation_cost,
+                lm_damping=1,
+            )
+            self.coarse_human_body_to_task[keypoint_name] = task
+            self.coarse_tasks.append(task)
+
+        # Do not reuse self.ik_limits: it may contain FrameVelocityLimit.  This
+        # stage intentionally contains only the base ConfigurationLimit.
+        self.coarse_ik_limits = [mink.ConfigurationLimit(self.model)]
+        self.two_stage_enabled = True
+
+    def update_coarse_targets(self, frame_idx):
+        """Set coarse FrameTask targets; no contact-lock target participates here."""
+        for keypoint_name, task in self.coarse_human_body_to_task.items():
+            target_pos, target_quat = self._get_target_pose(frame_idx, keypoint_name)
+            task.set_target(mink.SE3.from_rotation_and_translation(mink.SO3(target_quat), target_pos))
+
+    @staticmethod
+    def _task_error(configuration, tasks):
+        return np.linalg.norm(np.concatenate([task.compute_error(configuration) for task in tasks]))
+
+    def solve_ik_stage(self, tasks, convergence_tasks, limits, max_iter, threshold):
+        """Run one differential-IK stage in place and return its solve count."""
+        curr_error = self._task_error(self.configuration, convergence_tasks)
+        dt = self.configuration.model.opt.timestep
+        vel = mink.solve_ik(
+            self.configuration, tasks, dt, self.solver, self.damping, limits=limits
+        )
+        self.configuration.integrate_inplace(vel, dt)
+        next_error = self._task_error(self.configuration, convergence_tasks)
+        num_iter = 0
+        while curr_error - next_error > threshold and num_iter < max_iter:
+            curr_error = next_error
+            dt = self.configuration.model.opt.timestep
+            vel = mink.solve_ik(
+                self.configuration, tasks, dt, self.solver, self.damping, limits=limits
+            )
+            self.configuration.integrate_inplace(vel, dt)
+            next_error = self._task_error(self.configuration, convergence_tasks)
+            num_iter += 1
+        return num_iter + 1
 
     # 用途：根据 YAML 中的可选时间约束配置，为逐帧 IK 添加姿态连续性软任务和帧间位移硬限制。
     # 输入：不接收额外参数；从对象保存的机器人模型、源动作帧率及两段时间约束配置中读取所需信息。
@@ -744,11 +865,7 @@ class RobotRetarget:
                 self.current_contact_points.append(np.asarray(target_pos, dtype=np.float64))
     
     def error(self):
-        return np.linalg.norm(
-            np.concatenate(
-                [task.compute_error(self.configuration) for task in self.convergence_tasks]
-            )
-        )
+        return self._task_error(self.configuration, self.convergence_tasks)
     
     def _draw_pose(self, scene, pos, quat_wxyz, point_rgba, axis_alpha=1.0,
                    point_radius=0.035, axis_radius=0.005, axis_length=0.08):
@@ -915,34 +1032,46 @@ class RobotRetarget:
             for frame_idx in tqdm(range(self.num_frames), desc="Retargeting", unit="frame"):
                 start_time = time.time()
                 self.update_targets(frame_idx)
-                self.begin_temporal_frame()
-
-                # 记录更新前所有普通关键点与接触任务的未加权总误差，作为本轮迭代的比较基准。
-                curr_error = self.error()
-                # 读取 MuJoCo 模型的内部时间步长，作为本次差分 IK 速度积分的持续时间。
-                dt = self.configuration.model.opt.timestep
-
-                # 根据当前机器人姿态、全部任务与关节限位，求解使任务误差尽量下降的广义速度 vel。
-                vel = mink.solve_ik(
-                    self.configuration, self.tasks, dt, self.solver, self.damping, limits=self.ik_limits
-                )
-                # 将求得的速度 vel 在时间步长 dt 内积分，原地更新当前机器人的 qpos 姿态。
-                self.configuration.integrate_inplace(vel, dt)
-                # 重新计算更新后的总任务误差，以衡量这一次 IK 更新实际带来的改善。
-                next_error = self.error()
-                num_iter = 0
-                # 只要本次迭代仍能使总误差显著下降，便在单帧内继续细化；最大次数限制避免难解姿态无限迭代。
-                while curr_error - next_error > 0.001 and num_iter < self.max_iter:
-                    curr_error = next_error
+                if self.two_stage_enabled:
+                    # GMR's first stage updates the same Configuration in place.
+                    # It receives only coarse FrameTasks plus joint-range limits.
+                    self.update_coarse_targets(frame_idx)
+                    coarse_solves = self.solve_ik_stage(
+                        self.coarse_tasks,
+                        self.coarse_tasks,
+                        self.coarse_ik_limits,
+                        self.coarse_max_iter,
+                        self.coarse_convergence_threshold,
+                    )
+                    # Fine temporal tasks and the frame velocity budget are anchored
+                    # after coarse warm start, so neither enters the coarse QP.
+                    self.begin_temporal_frame()
+                    fine_solves = self.solve_ik_stage(
+                        self.tasks, self.convergence_tasks, self.ik_limits, self.max_iter, 0.001
+                    )
+                    self.frame_ik_iteration_counts.append(coarse_solves + fine_solves)
+                else:
+                    # Keep the legacy call order and numerical behavior intact when
+                    # the optional two-stage config is absent or explicitly disabled.
+                    self.begin_temporal_frame()
+                    curr_error = self.error()
                     dt = self.configuration.model.opt.timestep
                     vel = mink.solve_ik(
                         self.configuration, self.tasks, dt, self.solver, self.damping, limits=self.ik_limits
                     )
                     self.configuration.integrate_inplace(vel, dt)
                     next_error = self.error()
-                    num_iter += 1
-                # 保存当前帧的 IK 求解总次数（包含循环外首次求解），用于定位难收敛或计算开销偏高的帧，并评估任务权重与约束设置。
-                self.frame_ik_iteration_counts.append(num_iter + 1)
+                    num_iter = 0
+                    while curr_error - next_error > 0.001 and num_iter < self.max_iter:
+                        curr_error = next_error
+                        dt = self.configuration.model.opt.timestep
+                        vel = mink.solve_ik(
+                            self.configuration, self.tasks, dt, self.solver, self.damping, limits=self.ik_limits
+                        )
+                        self.configuration.integrate_inplace(vel, dt)
+                        next_error = self.error()
+                        num_iter += 1
+                    self.frame_ik_iteration_counts.append(num_iter + 1)
                 # 复制当前帧的完整广义位置，避免后续帧的原地积分改写已经保存的历史结果。
                 curr_pos = self.configuration.data.qpos.copy()
                 self.result_pos.append(curr_pos)
@@ -1046,6 +1175,7 @@ if  __name__ == "__main__":
     contact_position_cost = config.get("contact_pos_fixed_factor", 10.0)
     temporal_continuity_regularization = config.get("temporal_continuity_regularization")
     inter_frame_velocity_limit = config.get("inter_frame_velocity_limit")
+    two_stage_optimization = config.get("two_stage_optimization")
     
     # 初始化重定向器：加载目标机器人、关键点序列，并建立逐帧 IK 与接触锁定约束。
     robot_retarget = RobotRetarget(
@@ -1060,6 +1190,7 @@ if  __name__ == "__main__":
         contact_position_cost=contact_position_cost,
         temporal_continuity_regularization=temporal_continuity_regularization,
         inter_frame_velocity_limit=inter_frame_velocity_limit,
+        two_stage_optimization=two_stage_optimization,
     )
 
     # 对每一帧关键点求解目标机器人姿态，求解结果保存在重定向器的内存结果序列中。
