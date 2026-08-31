@@ -30,7 +30,7 @@ PYTHON_BIN=/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
 - `--overwrite`：允许替换该独立 two-stage 测试目录内同名的输出。
 - `PYTHON_BIN`：可选环境变量，用于指定 Python 解释器。
 
-二阶段开关与粗阶段收敛参数位于 `two_stage_optimization`：`enabled` 控制是否运行粗阶段，`coarse.max_iterations` 和 `coarse.convergence_threshold` 控制其停止条件。粗阶段只使用 YAML 明列的 `coarse.ik_match_table` FrameTask 和基础关节限位；细阶段继续使用项目原有 `ik_match_table`、接触锁定、时间连续性正则及帧间速度硬约束。
+二阶段开关与粗阶段收敛参数位于 `two_stage_optimization`：`enabled` 控制是否运行粗阶段，`coarse.max_additional_iterations` 是首次求解之后最多允许的额外求解次数（`10` 忠实对应 GMR 的循环语义），`coarse.convergence_threshold` 控制停止条件。粗阶段只使用 YAML 明列的 `coarse.ik_match_table` FrameTask 和基础关节限位；细阶段继续使用项目原有 `ik_match_table`、接触锁定、时间连续性正则及帧间速度硬约束。
 
 对已生成的结果进行非 GUI 校验：
 

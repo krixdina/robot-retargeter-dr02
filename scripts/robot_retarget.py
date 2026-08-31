@@ -281,7 +281,7 @@ class RobotRetarget:
         self.coarse_tasks = []
         self.coarse_human_body_to_task = {}
         self.coarse_ik_limits = []
-        self.coarse_max_iter = 0
+        self.coarse_max_additional_iterations = 0
         self.coarse_convergence_threshold = 0.001
         self.convergence_tasks = []
 
@@ -470,15 +470,17 @@ class RobotRetarget:
             raise ValueError(
                 "two_stage_optimization.coarse.ik_match_table must be a non-empty mapping"
             )
-        self.coarse_max_iter = int(
+        self.coarse_max_additional_iterations = int(
             _finite_number(
-                coarse_config.get("max_iterations"),
-                "two_stage_optimization.coarse.max_iterations",
+                coarse_config.get("max_additional_iterations"),
+                "two_stage_optimization.coarse.max_additional_iterations",
                 strictly_positive=True,
             )
         )
-        if self.coarse_max_iter != coarse_config.get("max_iterations"):
-            raise ValueError("two_stage_optimization.coarse.max_iterations must be an integer")
+        if self.coarse_max_additional_iterations != coarse_config.get("max_additional_iterations"):
+            raise ValueError(
+                "two_stage_optimization.coarse.max_additional_iterations must be an integer"
+            )
         self.coarse_convergence_threshold = _finite_number(
             coarse_config.get("convergence_threshold"),
             "two_stage_optimization.coarse.convergence_threshold",
@@ -541,8 +543,8 @@ class RobotRetarget:
     def _task_error(configuration, tasks):
         return np.linalg.norm(np.concatenate([task.compute_error(configuration) for task in tasks]))
 
-    def solve_ik_stage(self, tasks, convergence_tasks, limits, max_iter, threshold):
-        """Run one differential-IK stage in place and return its solve count."""
+    def solve_ik_stage(self, tasks, convergence_tasks, limits, max_additional_iterations, threshold):
+        """Run one initial IK solve plus at most ``max_additional_iterations`` in place."""
         curr_error = self._task_error(self.configuration, convergence_tasks)
         dt = self.configuration.model.opt.timestep
         vel = mink.solve_ik(
@@ -551,7 +553,7 @@ class RobotRetarget:
         self.configuration.integrate_inplace(vel, dt)
         next_error = self._task_error(self.configuration, convergence_tasks)
         num_iter = 0
-        while curr_error - next_error > threshold and num_iter < max_iter:
+        while curr_error - next_error > threshold and num_iter < max_additional_iterations:
             curr_error = next_error
             dt = self.configuration.model.opt.timestep
             vel = mink.solve_ik(
@@ -639,6 +641,34 @@ class RobotRetarget:
             self.temporal_posture_task.set_target(previous_q)
         if self.frame_velocity_limit is not None:
             self.frame_velocity_limit.begin_frame(previous_q)
+
+    def project_coarse_warm_start_to_frame_budget(self):
+        """Keep a coarse warm start inside the fine stage's prior-frame velocity box.
+
+        The coarse QP deliberately has no FrameVelocityLimit.  If it moves a
+        fine-limited joint beyond the budget anchored before coarse solving, the
+        subsequent fine QP can become numerically infeasible near a joint limit.
+        This projection changes only those selected tangent coordinates; all
+        other coarse results remain the fine-stage initial configuration.
+        """
+        limit = self.frame_velocity_limit
+        if limit is None:
+            return
+        if limit.previous_q is None:
+            raise RuntimeError("begin_temporal_frame must run before coarse projection")
+        used_displacement = np.empty(self.model.nv)
+        mujoco.mj_differentiatePos(
+            self.model, used_displacement, 1.0, limit.previous_q, self.configuration.q
+        )
+        used = used_displacement[limit.indices]
+        clipped = np.clip(used, -limit.frame_budget, limit.frame_budget)
+        if np.array_equal(used, clipped):
+            return
+        correction = np.zeros(self.model.nv)
+        correction[limit.indices] = clipped - used
+        projected_q = self.configuration.q.copy()
+        mujoco.mj_integratePos(self.model, projected_q, correction, 1.0)
+        self.configuration.update(projected_q)
 
     # 用途：为可识别的接触 body 预先创建位置锁定任务，并保存每段连续接触所需的固定目标位置。
     # 不直接返回数值；会向 self.contact_targets（接触约束描述的列表）加入可用接触项，并将对应的位置任务加入总 IK 任务集合。
@@ -1035,17 +1065,20 @@ class RobotRetarget:
                 if self.two_stage_enabled:
                     # GMR's first stage updates the same Configuration in place.
                     # It receives only coarse FrameTasks plus joint-range limits.
+                    # Anchor fine temporal/velocity terms to the preceding data-frame
+                    # result before coarse changes the shared Configuration.
+                    self.begin_temporal_frame()
                     self.update_coarse_targets(frame_idx)
                     coarse_solves = self.solve_ik_stage(
                         self.coarse_tasks,
                         self.coarse_tasks,
                         self.coarse_ik_limits,
-                        self.coarse_max_iter,
+                        self.coarse_max_additional_iterations,
                         self.coarse_convergence_threshold,
                     )
-                    # Fine temporal tasks and the frame velocity budget are anchored
-                    # after coarse warm start, so neither enters the coarse QP.
-                    self.begin_temporal_frame()
+                    self.project_coarse_warm_start_to_frame_budget()
+                    # Fine starts from coarse's in-place result, while its temporal
+                    # target and velocity budget remain anchored to the prior frame.
                     fine_solves = self.solve_ik_stage(
                         self.tasks, self.convergence_tasks, self.ik_limits, self.max_iter, 0.001
                     )

@@ -32,16 +32,16 @@ ik_match_table: {
 }
 
 # GMR paper Eq. 4 uses all matched-body orientations and hand/foot positions.
-# The explicit 10/100 orientation and 50/10 end-effector costs reproduce the
-# corresponding bvh_xsens_to_g1 GMR table where a DR02 keypoint equivalent
-# exists.  DR02's calf->ankle link is its available foot proxy; left/right
-# fore_arm->hand link are the hand end-effectors.  Unlike that single GMR JSON
-# (whose hand position is zero), hands use 10 because the paper's general
-# stage-1 definition explicitly includes both hands and feet.
+# Orientation costs and foot position cost 50 are taken from the corresponding
+# GMR bvh_xsens_to_g1 table. DR02's calf->ankle link is its available foot
+# proxy. Hand position cost 10 is an explicit, adjustable DR02 test choice
+# based on the paper's general stage-1 definition that includes both hands and
+# feet; the single GMR JSON instead sets hand position costs to zero.
 two_stage_optimization:
   enabled: true
   coarse:
-    max_iterations: 10
+    # GMR performs one initial solve, then permits at most 10 additional solves.
+    max_additional_iterations: 10
     convergence_threshold: 0.001
     ik_match_table: {
       "hips_mean": ["base_link", 0, 10],

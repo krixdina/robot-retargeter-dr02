@@ -35,7 +35,7 @@ def make_owner(config):
     owner.coarse_tasks = []
     owner.coarse_human_body_to_task = {}
     owner.coarse_ik_limits = []
-    owner.coarse_max_iter = 0
+    owner.coarse_max_additional_iterations = 0
     owner.coarse_convergence_threshold = 0.001
     owner.two_stage_enabled = False
     owner.setup_two_stage_optimization()
@@ -90,12 +90,12 @@ class TwoStageOptimizationTest(unittest.TestCase):
             make_owner({"enabled": True})
         with self.assertRaisesRegex(ValueError, "unknown keypoint"):
             make_owner(
-                {"enabled": True, "coarse": {"max_iterations": 10, "convergence_threshold": 0.001,
+                {"enabled": True, "coarse": {"max_additional_iterations": 10, "convergence_threshold": 0.001,
                     "ik_match_table": {"missing": ["link", 0, 1]}}}
             )
         with self.assertRaisesRegex(ValueError, "must be an integer"):
             make_owner(
-                {"enabled": True, "coarse": {"max_iterations": 1.5, "convergence_threshold": 0.001,
+                {"enabled": True, "coarse": {"max_additional_iterations": 1.5, "convergence_threshold": 0.001,
                     "ik_match_table": {"elbow": ["link", 0, 1]}}}
             )
 
@@ -113,19 +113,25 @@ class TwoStageOptimizationTest(unittest.TestCase):
         np.testing.assert_allclose(costs["left_fore_arm"][3:], [10, 10, 10])
         np.testing.assert_allclose(costs["left_calf"][:3], [50, 50, 50])
 
-    def test_short_two_stage_smoke_warm_starts_fine_and_enforces_fine_budget(self):
+    def test_short_two_stage_smoke_warm_starts_fine_and_enforces_full_frame_budget(self):
         retargeter = self.make_retargeter()
         retargeter.num_frames = 2
         retargeter.keypoints_pos = retargeter.keypoints_pos[:2]
         retargeter.keypoints_quat = retargeter.keypoints_quat[:2]
         retargeter.contact_seq = retargeter.contact_seq[:2]
+        initial_q = retargeter.configuration.q.copy()
         calls = []
         original = RobotRetarget.solve_ik_stage
 
         def wrapped(instance, tasks, *args, **kwargs):
             start = instance.configuration.q.copy()
+            temporal_target = (
+                instance.temporal_posture_task.target_q.copy()
+                if tasks is instance.tasks and instance.temporal_posture_task is not None
+                else None
+            )
             result = original(instance, tasks, *args, **kwargs)
-            calls.append((tasks, start, instance.configuration.q.copy()))
+            calls.append((tasks, start, instance.configuration.q.copy(), temporal_target))
             return result
 
         with mock.patch.object(RobotRetarget, "solve_ik_stage", new=wrapped):
@@ -133,12 +139,38 @@ class TwoStageOptimizationTest(unittest.TestCase):
 
         self.assertEqual(len(retargeter.result_pos), 2)
         self.assertEqual(len(calls), 4)
-        for coarse, fine in zip(calls[::2], calls[1::2]):
+        expected_previous_qs = [initial_q] + retargeter.result_pos[:-1]
+        for frame_idx, (coarse, fine) in enumerate(zip(calls[::2], calls[1::2])):
             self.assertIs(coarse[0], retargeter.coarse_tasks)
             self.assertIs(fine[0], retargeter.tasks)
-            np.testing.assert_allclose(fine[1], coarse[2])
+            # Fine keeps the coarse Configuration as its warm start, except for
+            # the deterministic projection needed to enter the hard full-frame
+            # velocity box anchored at the preceding output frame.
+            used = np.empty(retargeter.model.nv)
+            mujoco.mj_differentiatePos(
+                retargeter.model, used, 1.0, expected_previous_qs[frame_idx], coarse[2]
+            )
+            projected_q = coarse[2].copy()
+            correction = np.zeros(retargeter.model.nv)
+            indices = retargeter.frame_velocity_limit.indices
+            correction[indices] = np.clip(
+                used[indices],
+                -retargeter.frame_velocity_limit.frame_budget,
+                retargeter.frame_velocity_limit.frame_budget,
+            ) - used[indices]
+            mujoco.mj_integratePos(retargeter.model, projected_q, correction, 1.0)
+            np.testing.assert_allclose(fine[1], projected_q)
+            # Temporal and velocity anchors must be the prior data-frame result,
+            # rather than the intermediate coarse configuration.
+            np.testing.assert_allclose(fine[3], expected_previous_qs[frame_idx])
             displacement = np.empty(retargeter.model.nv)
-            mujoco.mj_differentiatePos(retargeter.model, displacement, 1.0, fine[1], fine[2])
+            mujoco.mj_differentiatePos(
+                retargeter.model,
+                displacement,
+                1.0,
+                expected_previous_qs[frame_idx],
+                retargeter.result_pos[frame_idx],
+            )
             np.testing.assert_array_less(
                 np.abs(displacement[retargeter.frame_velocity_limit.indices]),
                 retargeter.frame_velocity_limit.frame_budget + 1e-8,
