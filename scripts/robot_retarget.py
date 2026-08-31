@@ -27,6 +27,7 @@ import csv
 import copy
 import os
 import glfw
+# 用抽象集合接口校验 YAML 配置中的映射和序列类型。
 from collections.abc import Mapping, Sequence
 from tqdm import tqdm
 from scipy.spatial.transform import Rotation as Rot
@@ -39,12 +40,18 @@ _PAUSED = False
 DEFAULT_TEMPORAL_JOINT_SUBSTRINGS = ("shoulder", "elbow")
 
 
+# 用途：根据 MuJoCo 的关节类别，确定该关节在速度/切空间向量中占用的连续分量数，供后续按关节筛选自由度。
+# 输入：joint_type，表示当前 MuJoCo 关节的类别枚举值。
+# 输出：返回该关节对应的切空间维度，用于计算该关节自由度索引区间的终点。
 def _joint_dof_width(joint_type):
     """Return the MuJoCo tangent-space width of one joint."""
+    # 自由关节同时描述三维平移和三维转动，因此需要六个速度分量。
     if joint_type == mujoco.mjtJoint.mjJNT_FREE:
         return 6
+    # 球关节仅描述三维转动，因此需要三个速度分量。
     if joint_type == mujoco.mjtJoint.mjJNT_BALL:
         return 3
+    # 铰链关节和滑动关节都只能沿单一方向运动。
     return 1
 
 
@@ -71,8 +78,11 @@ def _enabled_flag(config, setting_name):
     return bool(enabled)
 
 
+# 用途：将配置中的关节名称片段转换为 MuJoCo 广义速度向量中的索引，用于提取对应的速度值，供连续性正则项和帧间速度限制定位目标关节。
+# 输入：model，已加载的 MuJoCo 机器人模型；substrings，期望匹配的关节名称片段序列；setting_name，报错信息中标识配置来源的名称。
 def _joint_dof_indices_for_substrings(model, substrings, setting_name):
     """Return non-free DoF indices selected by configured joint-name substrings."""
+    # 配置必须提供非空的名称片段列表；字符串本身虽可迭代，但不是这里需要的列表配置。
     if not isinstance(substrings, Sequence) or isinstance(substrings, (str, bytes)):
         raise ValueError(f"{setting_name}.joint_name_substrings must be a list of strings")
     if not substrings:
@@ -80,9 +90,11 @@ def _joint_dof_indices_for_substrings(model, substrings, setting_name):
 
     indices = []
     for substring in substrings:
+        # 每个筛选条件必须是非空文本，避免无意中匹配全部关节或产生难以定位的配置错误。
         if not isinstance(substring, str) or not substring:
             raise ValueError(f"{setting_name}.joint_name_substrings must contain non-empty strings")
         matched = False
+        # 扫描模型中的全部关节，收集名称包含当前片段的关节所占用的所有速度分量。
         for joint_id in range(model.njnt):
             joint_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
             if joint_name is None or substring not in joint_name:
@@ -93,38 +105,46 @@ def _joint_dof_indices_for_substrings(model, substrings, setting_name):
             dof_end = dof_start + _joint_dof_width(model.jnt_type[joint_id])
             indices.extend(range(dof_start, dof_end))
             matched = True
+        # 每个配置片段都必须至少命中一个可受约束的关节，防止拼写错误使约束悄然失效。
         if not matched:
             raise ValueError(
                 f"{setting_name}.joint_name_substrings contains unknown joint substring: {substring!r}"
             )
+    # 合并多个筛选条件可能重复命中的分量，并统一为下游数值计算需要的整型数组。
     return np.asarray(sorted(set(indices)), dtype=int)
 
 
 class FrameVelocityLimit(mink.Limit):
-    """Per-data-frame displacement budget for configured non-free joint DoFs.
-
-    ``begin_frame`` fixes the qpos anchor.  Each QP then receives only the
-    remaining part of ``max_velocity / fps``; unlike ``mink.VelocityLimit``,
-    repeated IK iterations cannot exceed the frame-wide budget.
-
-    Free joints (including a floating base) are deliberately not selected by
-    this feature, matching Mink's ``VelocityLimit`` joint-velocity semantics.
     """
+    每一帧开始时,begin_frame 记录当前机器人姿态，作为这一帧的起点；
+    配置的最大关节速度 max_velocity 除以源动作帧率 fps,得到该关节一帧允许的最大位移;
+    一帧内会进行多次 QP/IK 迭代。每次迭代只能使用“剩余可移动量”，所以累积结果不会超过整帧预算；
+    浮动基座等 FREE 关节不会被这个约束选中，只约束配置指定的普通关节。
+    """
+    # 约束作用于整帧累计位移，而非单次 IK 求解步，因此多次迭代也不会突破该帧的速度预算。
 
+    # 用途：初始化指定关节的整帧位移约束所需的模型信息、速度上限和数值计算状态。
+    # 输入：model，提供关节位置和速度维度的 MuJoCo 机器人模型；indices，需要施加约束的速度分量位置；max_velocities，与各位置一一对应的每秒最大速度；fps，输入动作每秒包含的帧数。
     def __init__(self, model, indices, max_velocities, fps):
+        # 将帧率规范为正的有限数值，以便把每秒速度上限换算为每帧可用的位移预算。
         fps = _finite_number(fps, "inter_frame_velocity_limit.fps", strictly_positive=True)
         self.model = model
         self.indices = np.asarray(indices, dtype=int)
         self.max_velocities = np.asarray(max_velocities, dtype=float)
+        # 每个受约束的速度分量都必须对应一个速度上限，避免索引和上限错位。
         if self.indices.ndim != 1 or self.max_velocities.shape != self.indices.shape:
             raise ValueError("FrameVelocityLimit indices and max_velocities must have matching shapes")
+        # 速度上限必须为正的有限值，才能形成有意义且可求解的位移边界。
         if not np.all(np.isfinite(self.max_velocities)) or np.any(self.max_velocities <= 0.0):
             raise ValueError("inter_frame_velocity_limit velocities must be finite and > 0")
+        # 构建从完整速度向量选取目标关节分量的矩阵，并预先计算每帧允许的最大累计位移。
         self.projection_matrix = np.eye(model.nv)[self.indices]
         self.frame_budget = self.max_velocities / fps
+        # 每帧开始时才记录姿态锚点；在此之前不得生成速度约束。
         self.previous_q = None
 
     def begin_frame(self, previous_q):
+        # 保存本帧起始关节位置，后续以它为基准计算本帧已经累积的实际位移。
         previous_q = np.asarray(previous_q, dtype=float)
         if previous_q.shape != (self.model.nq,):
             raise ValueError(
@@ -132,11 +152,19 @@ class FrameVelocityLimit(mink.Limit):
             )
         self.previous_q = previous_q.copy()
 
+    # 用途：根据本帧已累计的关节位移，生成本次 IK 更新仍可使用的线性不等式约束。
+    # 输入：configuration，包含当前待优化机器人姿态的 Mink 配置对象；dt，IK 求解器传入的单次积分步长，但此约束以输入动作帧率计算预算而不使用它。
+    # 输出：返回 Mink 可传入 QP 求解器的约束对象，其中限制下一次关节增量后仍不超出本帧总位移预算。
     def compute_qp_inequalities(self, configuration, dt):
+        # 位移预算由输入动作的帧率定义，与 IK 求解器为单次积分采用的时间步长无关。
         del dt  # The budget is defined by source-data fps, not IK integration dt.
         if self.previous_q is None:
             raise RuntimeError("FrameVelocityLimit.begin_frame must be called before solve_ik")
+        # 使用 MuJoCo 的位置差分处理旋转表示，得到从本帧起点到当前解的速度空间累计位移。
         used_displacement = np.empty(self.model.nv)
+        # 参数 1：机器人模型，用于按每类关节的位置表示规则计算差分；参数 2：预分配的 nv 维输出数组，调用后会被原地写入累计位移。
+        # 参数 3：差分时间间隔 1 秒，使输出数值直接表示位移；参数 4：本帧起始的 qpos 姿态；参数 5：当前 IK 解的 qpos 姿态。
+        # 调用完成后，输出数组从未初始化状态变为“起始姿态到当前姿态”的各关节切空间累计增量，供后续提取受限关节的已用预算。
         mujoco.mj_differentiatePos(
             self.model,
             used_displacement,
@@ -145,9 +173,11 @@ class FrameVelocityLimit(mink.Limit):
             configuration.q,
         )
         used = used_displacement[self.indices]
-        # G * delta_q <= h.  Both signs make the remaining frame budget explicit.
+        # 构造 G·Δq ≤ h：上半部分限制正向增量不超过“预算减已用位移”，下半部分限制反向增量。
+        # 两者合并后等价于 -预算 ≤ 已用位移 + 本次增量 ≤ 预算，保证帧内累计位移不越界。
         G = np.vstack([self.projection_matrix, -self.projection_matrix])
         h = np.hstack([self.frame_budget - used, self.frame_budget + used])
+        # 将矩阵形式的不等式交给 Mink，并入当前 IK 的二次规划问题。
         return mink.Constraint(G=G, h=h)
 
 
@@ -257,6 +287,7 @@ class RobotRetarget:
         self.setup_contact_targets()
         # Posture regularization should guide the QP but not change the legacy
         # task-error stopping criterion.
+        # 即只在 QP 目标中加入姿态正则项，而不在优化问题判定是否需要继续进行迭代求解时将这一项 loss 纳入考虑
         self.convergence_tasks = list(self.tasks)
         # 建立可选的时间连续性任务与帧间硬速度约束；缺省配置保持旧行为。
         self.setup_temporal_constraints()
@@ -410,8 +441,12 @@ class RobotRetarget:
                 self.task_errors[task] = []
         pass
 
+    # 用途：根据 YAML 中的可选时间约束配置，为逐帧 IK 添加姿态连续性软任务和帧间位移硬限制。
+    # 输入：不接收额外参数；从对象保存的机器人模型、源动作帧率及两段时间约束配置中读取所需信息。
+    # 输出：不直接返回数值；可能向总 IK 任务列表加入姿态平滑任务，并向总 IK 限制列表加入帧间速度约束。
     def setup_temporal_constraints(self):
         """Create optional temporal IK terms after source fps is available."""
+        # 第一部分读取姿态连续性配置：该软任务鼓励指定关节保持接近上一帧最终姿态。
         temporal_config = self.temporal_continuity_regularization
         if temporal_config is not None:
             if not isinstance(temporal_config, Mapping):
@@ -424,16 +459,22 @@ class RobotRetarget:
                     "temporal_continuity_regularization.cost",
                     strictly_positive=True,
                 )
+                # 将配置的关节名称片段转换为机器人速度空间中的分量位置
                 indices = _joint_dof_indices_for_substrings(
                     self.model,
                     temporal_config.get("joint_name_substrings", DEFAULT_TEMPORAL_JOINT_SUBSTRINGS),
                     "temporal_continuity_regularization",
                 )
+                # 未选中的分量代价为零，选中分量使用相同正代价；该代价数组定义姿态偏离目标的相对惩罚强度。
                 posture_cost = np.zeros(self.model.nv)
                 posture_cost[indices] = cost
+                # 对每个选中分量，Mink 最小化“代价权重 ×（本次关节增量 + 当前相对目标姿态的误差）”的平方；
+                # 当前目标姿态在每个动作数据帧开始时设为该帧的初始姿态，通常即上一动作帧的最终结果。
+                # 同一动作帧内的所有 IK 内部迭代共用这一固定目标；当前迭代姿态会更新，但目标不会随每一步刷新。
                 self.temporal_posture_task = mink.PostureTask(self.model, cost=posture_cost)
                 self.tasks.append(self.temporal_posture_task)
 
+        # 第二部分读取帧间速度配置：该硬限制将每秒速度上限按输入帧率换算为每帧累计位移预算。
         velocity_config = self.inter_frame_velocity_limit_config
         if velocity_config is not None:
             if not isinstance(velocity_config, Mapping):
@@ -443,9 +484,10 @@ class RobotRetarget:
                 if not isinstance(velocity_by_substring, Mapping) or not velocity_by_substring:
                     raise ValueError(
                         "inter_frame_velocity_limit.joint_velocity_limits must be a non-empty mapping"
-                    )
+                )
                 indices = []
                 max_velocities = []
+                # 为每个名称片段收集全部匹配的关节分量，并将该片段对应的速度上限复制到每个分量。
                 for substring, max_velocity in velocity_by_substring.items():
                     max_velocity = _finite_number(
                         max_velocity,
@@ -462,6 +504,7 @@ class RobotRetarget:
                 # Repeated substring matches are ambiguous, so reject them instead of silently picking one.
                 if len(set(indices)) != len(indices):
                     raise ValueError("inter_frame_velocity_limit joint substrings must not overlap")
+                # 创建帧内累计位移的硬约束；该对象会在每次 IK 求解时由 Mink 自动转为 QP 不等式。
                 self.frame_velocity_limit = FrameVelocityLimit(
                     self.model, indices, max_velocities, self.fps
                 )
@@ -898,6 +941,7 @@ class RobotRetarget:
                     self.configuration.integrate_inplace(vel, dt)
                     next_error = self.error()
                     num_iter += 1
+                # 保存当前帧的 IK 求解总次数（包含循环外首次求解），用于定位难收敛或计算开销偏高的帧，并评估任务权重与约束设置。
                 self.frame_ik_iteration_counts.append(num_iter + 1)
                 # 复制当前帧的完整广义位置，避免后续帧的原地积分改写已经保存的历史结果。
                 curr_pos = self.configuration.data.qpos.copy()

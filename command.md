@@ -5,6 +5,68 @@ scripts/dr02_data_converter/convert_single_motiondecode_to_dr02.sh \
   --fps 120 \
   --overwrite
 ```
+
+### 带时间连续性与帧间速度约束的单文件测试
+
+该命令先使用 `config/robot/DR02.yaml` 生成 DR02 目标关键点，再使用
+`config/robot/DR02_temporal_constraints_test.yaml` 执行带时间连续性正则和
+帧间关节速度硬约束的 IK，最后导出测试版 CSV、NPZ，并默认打开 MuJoCo 查看器。
+
+```bash
+scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_constraints_test.sh \
+  --input dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
+  --fps 120 \
+  --overwrite
+```
+
+无界面运行：
+
+```bash
+scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_constraints_test.sh \
+  --input dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
+  --fps 120 \
+  --no-viewer \
+  --overwrite
+```
+
+启动项说明：
+
+| 启动项 | 是否必需 | 默认值 | 说明 |
+|---|---|---|---|
+| `--input PATH` | 是 | 无 | 输入的 MotionDecode G1 CSV。文件必须存在且扩展名为 `.csv`。 |
+| `--fps FPS` | 否 | `120` | 输入动作的真实采样率。该值会传给接触检测、帧间速度预算和最终 NPZ，必须是正数。 |
+| `--output-name NAME` | 否 | 输入 CSV 的文件名（不含扩展名） | 自定义本次测试输出的文件名前缀。只能是单个文件名，不能包含 `/`。适合对同一输入测试多组参数时避免重名。 |
+| `--no-viewer` | 否 | 未启用 | 跳过最后的 MuJoCo 可视化，适合服务器、自动测试和批处理。 |
+| `--overwrite` | 否 | 未启用 | 允许替换同名测试产物。未启用且任一目标文件已存在时，脚本会停止，避免误覆盖。 |
+| `-h`, `--help` | 否 | 未启用 | 显示脚本帮助并退出。 |
+
+查看帮助：
+
+```bash
+scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_constraints_test.sh --help
+```
+
+测试产物目录：
+
+```text
+output_data/dr02_data_converter/temporal_constraints_test/normalized/  # 规范化后的 G1 CSV
+output_data/keypoints/DR02_temporal_constraints_test/                  # DR02 目标关键点 PKL
+output_data/robot_motion/                                              # 带约束的 DR02 qpos CSV
+output_data/dr02_data_converter/temporal_constraints_test/npz/         # 强化学习 NPZ
+```
+
+默认输出文件名会包含 `DR02_temporal_constraints_test`，因此不会与普通
+`DR02.yaml` 流程产生的 `_DR02.csv` 混淆。若已经激活 `robot_retargeter`
+Conda 环境，无需额外设置 `PYTHON_BIN`；如需指定解释器，可在命令前设置：
+
+```bash
+PYTHON_BIN=/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_constraints_test.sh \
+  --input dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
+  --fps 120 \
+  --no-viewer
+```
+
 ### 批量数据转换测试
 ```
 scripts/dr02_data_converter/run_dr02_batch.sh \
