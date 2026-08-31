@@ -5,14 +5,15 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  convert_single_motiondecode_to_dr02.sh --input <MotionDecode.csv> [--fps 120] [--output-name NAME] [--no-viewer] [--overwrite]
+  convert_single_motiondecode_to_dr02.sh --input <MotionDecode.csv> [--fps 120] [--output-name NAME] [--no-compare|--no-viewer] [--overwrite]
 
 Options:
   --input PATH       MotionDecode CSV to convert (required).
   --fps FPS          Source/capture frame rate passed through every stage (default: 120).
   --output-name NAME Override the output stem (default: source CSV stem).
                      Batch conversion uses this only for unique internal staging.
-  --no-viewer        Do not open the final MuJoCo DR02 visualization window.
+  --no-compare       Do not open the final MuJoCo G1/DR02 comparison viewer.
+  --no-viewer        Deprecated alias for --no-compare.
   --overwrite        Replace this pipeline's pre-existing outputs for the same input.
   -h, --help         Show this help text.
 
@@ -24,7 +25,7 @@ EOF
 INPUT=""
 FPS="120"
 OUTPUT_NAME=""
-NO_VIEWER=false
+NO_COMPARE=false
 OVERWRITE=false
 
 while [[ $# -gt 0 ]]; do
@@ -44,8 +45,13 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_NAME="$2"
             shift 2
             ;;
+        --no-compare)
+            NO_COMPARE=true
+            shift
+            ;;
         --no-viewer)
-            NO_VIEWER=true
+            echo "[warn] --no-viewer is deprecated; use --no-compare" >&2
+            NO_COMPARE=true
             shift
             ;;
         --overwrite)
@@ -124,7 +130,8 @@ fi
 
 ADAPTER="${SCRIPT_DIR}/motiondecode_adapter.py"
 NPZ_EXPORTER="${SCRIPT_DIR}/dr02_npz_exporter.py"
-for required_file in "${ADAPTER}" "${NPZ_EXPORTER}" scripts/robot_replay.py scripts/robot_retarget.py scripts/multi_robot_visualize.py config/robot/g1.yaml config/robot/DR02.yaml; do
+COMPARER="${SCRIPT_DIR}/compare_g1_dr02_mujoco.py"
+for required_file in "${ADAPTER}" "${NPZ_EXPORTER}" "${COMPARER}" scripts/robot_replay.py scripts/robot_retarget.py config/robot/g1.yaml config/robot/DR02.yaml; do
     [[ -f "${required_file}" ]] || { echo "[error] required file not found: ${required_file}" >&2; exit 1; }
 done
 
@@ -184,15 +191,16 @@ echo "[3/5] Retarget DR02 motion"
 echo "[4/5] Export DR02 NPZ"
 "${PYTHON_BIN}" "${NPZ_EXPORTER}" --input "${ROBOT_MOTION_PATH}" --output "${NPZ_PATH}" --fps "${FPS}"
 
-if [[ "${NO_VIEWER}" == true ]]; then
-    echo "[5/5] Skip DR02 visualization (--no-viewer)"
+if [[ "${NO_COMPARE}" == true ]]; then
+    echo "[5/5] Skip G1/DR02 comparison (--no-compare)"
 else
-    echo "[5/5] Visualize DR02 motion"
-    "${PYTHON_BIN}" scripts/multi_robot_visualize.py \
-        --motion "${KEYPOINTS_NAME}" \
-        --robots DR02 \
-        --source_fps "${FPS}" \
-        --render_fps "${FPS}"
+    echo "[5/5] Compare source G1 and retargeted DR02 motion"
+    "${PYTHON_BIN}" "${COMPARER}" \
+        --source-csv "${INPUT_ABS}" \
+        --target-csv "${ROBOT_MOTION_PATH}" \
+        --source-fps "${FPS}" \
+        --target-fps "${FPS}" \
+        --render-fps "${FPS}"
 fi
 
 echo "[done] normalized CSV: ${NORMALIZED_PATH}"

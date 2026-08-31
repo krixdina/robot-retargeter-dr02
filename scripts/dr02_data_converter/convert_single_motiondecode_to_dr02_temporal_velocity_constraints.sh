@@ -5,13 +5,14 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  convert_single_motiondecode_to_dr02_temporal_velocity_constraints.sh --input <MotionDecode.csv> [--fps 120] [--output-name NAME] [--no-viewer] [--overwrite]
+  convert_single_motiondecode_to_dr02_temporal_velocity_constraints.sh --input <MotionDecode.csv> [--fps 120] [--output-name NAME] [--no-compare|--no-viewer] [--overwrite]
 
 Options:
   --input PATH       MotionDecode CSV to convert (required).
   --fps FPS          Source/capture frame rate used by every stage (default: 120).
   --output-name NAME Override the output stem (default: source CSV stem).
-  --no-viewer        Do not open the final MuJoCo visualization window.
+  --no-compare       Do not open the final MuJoCo G1/DR02 comparison viewer.
+  --no-viewer        Deprecated alias for --no-compare.
   --overwrite        Replace this test pipeline's existing outputs.
   -h, --help         Show this help text.
 
@@ -29,7 +30,7 @@ EOF
 INPUT=""
 FPS="120"
 OUTPUT_NAME=""
-NO_VIEWER=false
+NO_COMPARE=false
 OVERWRITE=false
 
 while [[ $# -gt 0 ]]; do
@@ -49,8 +50,13 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_NAME="$2"
             shift 2
             ;;
+        --no-compare)
+            NO_COMPARE=true
+            shift
+            ;;
         --no-viewer)
-            NO_VIEWER=true
+            echo "[warn] --no-viewer is deprecated; use --no-compare" >&2
+            NO_COMPARE=true
             shift
             ;;
         --overwrite)
@@ -125,13 +131,14 @@ CONSTRAINT_CONFIG="config/robot/DR02_temporal_constraints_test.yaml"
 CONSTRAINT_ROBOT="$(basename "${CONSTRAINT_CONFIG}" .yaml)"
 ADAPTER="${SCRIPT_DIR}/motiondecode_adapter.py"
 NPZ_EXPORTER="${SCRIPT_DIR}/dr02_npz_exporter.py"
+COMPARER="${SCRIPT_DIR}/compare_g1_dr02_mujoco.py"
 
 for required_file in \
     "${ADAPTER}" \
     "${NPZ_EXPORTER}" \
+    "${COMPARER}" \
     scripts/robot_replay.py \
     scripts/robot_retarget.py \
-    scripts/multi_robot_visualize.py \
     "${SOURCE_CONFIG}" \
     "${KEYPOINT_CONFIG}" \
     "${CONSTRAINT_CONFIG}"; do
@@ -208,15 +215,16 @@ if [[ "${OVERWRITE}" == true ]]; then
 fi
 "${PYTHON_BIN}" "${NPZ_EXPORTER}" "${NPZ_ARGS[@]}"
 
-if [[ "${NO_VIEWER}" == true ]]; then
-    echo "[5/5] Skip constrained DR02 visualization (--no-viewer)"
+if [[ "${NO_COMPARE}" == true ]]; then
+    echo "[5/5] Skip G1/constrained DR02 comparison (--no-compare)"
 else
-    echo "[5/5] Visualize constrained DR02 motion"
-    "${PYTHON_BIN}" scripts/multi_robot_visualize.py \
-        --motion "${KEYPOINTS_NAME}" \
-        --robots "${CONSTRAINT_ROBOT}" \
-        --source_fps "${FPS}" \
-        --render_fps "${FPS}"
+    echo "[5/5] Compare source G1 and constrained DR02 motion"
+    "${PYTHON_BIN}" "${COMPARER}" \
+        --source-csv "${INPUT_ABS}" \
+        --target-csv "${ROBOT_MOTION_PATH}" \
+        --source-fps "${FPS}" \
+        --target-fps "${FPS}" \
+        --render-fps "${FPS}"
 fi
 
 echo "[done] normalized CSV: ${NORMALIZED_PATH}"

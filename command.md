@@ -1,16 +1,35 @@
 ### 单文件测试模式
-```
+
+普通单文件脚本会依次导出规范化 CSV、DR02 关键点 PKL、DR02 动作 CSV 和 NPZ；
+完成后默认启动 MuJoCo 对照查看器，同时显示原始 MotionDecode G1（+Y）和本次生成的
+DR02（-Y）。
+
+```bash
 scripts/dr02_data_converter/convert_single_motiondecode_to_dr02.sh \
   --input dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
   --fps 120 \
   --overwrite
 ```
 
+关闭转换后的对照查看器（适合批处理或无图形界面环境）：
+
+```bash
+scripts/dr02_data_converter/convert_single_motiondecode_to_dr02.sh \
+  --input dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
+  --fps 120 \
+  --no-compare \
+  --overwrite
+```
+
+`--no-compare` 仅跳过最后的 G1/DR02 对照，不影响 CSV、PKL 或 NPZ 输出。
+旧参数 `--no-viewer` 仍可用，但已弃用，等价于 `--no-compare`。
+
 ### 带时间连续性与帧间速度约束的单文件测试
 
 该命令先使用 `config/robot/DR02.yaml` 生成 DR02 目标关键点，再使用
 `config/robot/DR02_temporal_constraints_test.yaml` 执行带时间连续性正则和
-帧间关节速度硬约束的 IK，最后导出测试版 CSV、NPZ，并默认打开 MuJoCo 查看器。
+帧间关节速度硬约束的 IK，最后导出测试版 CSV、NPZ，并默认打开 MuJoCo
+对照查看器，同时显示原始 MotionDecode G1 和本次生成的受约束 DR02。
 
 ```bash
 scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_temporal_velocity_constraints.sh \
@@ -19,13 +38,13 @@ scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_temporal_velocit
   --overwrite
 ```
 
-无界面运行：
+关闭对照查看器：
 
 ```bash
 scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_temporal_velocity_constraints.sh \
   --input dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
   --fps 120 \
-  --no-viewer \
+  --no-compare \
   --overwrite
 ```
 
@@ -36,7 +55,8 @@ scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_temporal_velocit
 | `--input PATH` | 是 | 无 | 输入的 MotionDecode G1 CSV。文件必须存在且扩展名为 `.csv`。 |
 | `--fps FPS` | 否 | `120` | 输入动作的真实采样率。该值会传给接触检测、帧间速度预算和最终 NPZ，必须是正数。 |
 | `--output-name NAME` | 否 | 输入 CSV 的文件名（不含扩展名） | 自定义本次测试输出的文件名前缀。只能是单个文件名，不能包含 `/`。适合对同一输入测试多组参数时避免重名。 |
-| `--no-viewer` | 否 | 未启用 | 跳过最后的 MuJoCo 可视化，适合服务器、自动测试和批处理。 |
+| `--no-compare` | 否 | 未启用 | 跳过最后的 G1/DR02 MuJoCo 对照，适合服务器、自动测试和批处理。 |
+| `--no-viewer` | 否 | 未启用 | 已弃用；等价于 `--no-compare`，仅为兼容旧调用保留。 |
 | `--overwrite` | 否 | 未启用 | 允许替换同名测试产物。未启用且任一目标文件已存在时，脚本会停止，避免误覆盖。 |
 | `-h`, `--help` | 否 | 未启用 | 显示脚本帮助并退出。 |
 
@@ -64,7 +84,7 @@ PYTHON_BIN=/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
 scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_temporal_velocity_constraints.sh \
   --input dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
   --fps 120 \
-  --no-viewer
+  --no-compare
 ```
 
 ### 批量数据转换测试
