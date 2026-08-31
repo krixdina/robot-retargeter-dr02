@@ -13,7 +13,7 @@ scripts/dr02_data_converter/convert_single_motiondecode_to_dr02.sh \
 帧间关节速度硬约束的 IK，最后导出测试版 CSV、NPZ，并默认打开 MuJoCo 查看器。
 
 ```bash
-scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_constraints_test.sh \
+scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_temporal_velocity_constraints.sh \
   --input dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
   --fps 120 \
   --overwrite
@@ -22,7 +22,7 @@ scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_constraints_test
 无界面运行：
 
 ```bash
-scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_constraints_test.sh \
+scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_temporal_velocity_constraints.sh \
   --input dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
   --fps 120 \
   --no-viewer \
@@ -43,7 +43,7 @@ scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_constraints_test
 查看帮助：
 
 ```bash
-scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_constraints_test.sh --help
+scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_temporal_velocity_constraints.sh --help
 ```
 
 测试产物目录：
@@ -61,7 +61,7 @@ Conda 环境，无需额外设置 `PYTHON_BIN`；如需指定解释器，可在�
 
 ```bash
 PYTHON_BIN=/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_constraints_test.sh \
+scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_temporal_velocity_constraints.sh \
   --input dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
   --fps 120 \
   --no-viewer

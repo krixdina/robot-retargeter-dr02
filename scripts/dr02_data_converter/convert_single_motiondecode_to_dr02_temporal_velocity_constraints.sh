@@ -5,7 +5,7 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  convert_single_motiondecode_to_dr02_constraints_test.sh --input <MotionDecode.csv> [--fps 120] [--output-name NAME] [--no-viewer] [--overwrite]
+  convert_single_motiondecode_to_dr02_temporal_velocity_constraints.sh --input <MotionDecode.csv> [--fps 120] [--output-name NAME] [--no-viewer] [--overwrite]
 
 Options:
   --input PATH       MotionDecode CSV to convert (required).
