@@ -31,13 +31,16 @@ ik_match_table: {
 
 contact_pos_fixed_factor: 15.0
 
-# Mink uses c^2 in the posture least-squares objective. These test-only explicit
-# switches constrain only selected non-free joints; the floating-base freejoint
-# is intentionally not covered. Absent fields in existing robot YAMLs disable both.
+# Mink 将这里配置的 cost=c 作为残差的缩放系数 C；PostureTask 对总目标函数的
+# 实际贡献是 ||C e||^2，因此标量 cost=c 对应的平方项系数是 c^2，而不是 c。
+# 例如 cost=0.05 对应系数 0.05^2=0.0025；cost=10 对应系数 10^2=100。
+# 下列开关和数值仅用于功能测试，只约束匹配到的非 free joint；floating-base
+# freejoint 不包含在内。旧机器人 YAML 未配置这些字段时，两项功能均默认关闭。
 temporal_continuity_regularization:
   enabled: true
-  cost: 0.05
-  joint_name_substrings: ["shoulder", "elbow"]
+  cost: 6.5
+  joint_name_substrings: ["shoulder", "elbow", "wrist"]
+  # joint_name_substrings: ["shoulder", "elbow"]
 
 inter_frame_velocity_limit:
   enabled: true
