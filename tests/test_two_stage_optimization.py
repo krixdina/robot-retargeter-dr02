@@ -209,6 +209,55 @@ class TwoStageOptimizationTest(unittest.TestCase):
         )
         self.assertFalse(np.allclose(initial_q, retargeter.result_pos[0]))
 
+    def test_frame_zero_refreshes_fine_targets_after_root_initialization(self):
+        retargeter = self.make_retargeter()
+        retargeter.num_frames = 1
+        retargeter.keypoints_pos = retargeter.keypoints_pos[:1]
+        retargeter.keypoints_quat = retargeter.keypoints_quat[:1]
+        # Force every contact task down the non-active branch, where its target
+        # is derived from the current robot FK rather than source keypoints.
+        retargeter.contact_seq = np.zeros_like(retargeter.contact_seq[:1], dtype=bool)
+        events = []
+        target_snapshots = []
+        original_update_targets = retargeter.update_targets
+        original_root_init = retargeter._initialize_root_from_target
+        original_update_coarse_targets = retargeter.update_coarse_targets
+        original_solve = retargeter.solve_ik_stage
+
+        def record_targets(frame_idx):
+            original_update_targets(frame_idx)
+            events.append("targets")
+            target_snapshots.append((
+                retargeter.contact_targets[0]["task"].transform_target_to_world.translation().copy(),
+                retargeter._get_body_pose(retargeter.contact_targets[0]["body_name"])[0].copy(),
+            ))
+
+        def record_root_init(frame_idx):
+            original_root_init(frame_idx)
+            events.append("root_init")
+
+        def record_coarse_targets(frame_idx):
+            original_update_coarse_targets(frame_idx)
+            events.append("coarse_targets")
+
+        def record_solve(tasks, *args, **kwargs):
+            events.append("coarse_solve" if tasks is retargeter.coarse_tasks else "fine_solve")
+            return original_solve(tasks, *args, **kwargs)
+
+        with mock.patch.object(retargeter, "update_targets", side_effect=record_targets), \
+             mock.patch.object(retargeter, "_initialize_root_from_target", side_effect=record_root_init), \
+             mock.patch.object(retargeter, "update_coarse_targets", side_effect=record_coarse_targets), \
+             mock.patch.object(retargeter, "solve_ik_stage", side_effect=record_solve):
+            retargeter.retarget()
+
+        self.assertEqual(
+            events,
+            ["targets", "root_init", "targets", "coarse_targets", "coarse_solve", "fine_solve"],
+        )
+        self.assertEqual(len(target_snapshots), 2)
+        self.assertFalse(np.allclose(target_snapshots[0][0], target_snapshots[1][0]))
+        np.testing.assert_allclose(target_snapshots[1][0], target_snapshots[1][1])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1108,6 +1108,10 @@ class RobotRetarget:
                     # IK only for the initial pose.  Later frames retain the
                     # established temporal/FVL single-stage trajectory semantics.
                     self._initialize_root_from_target(frame_idx)
+                    # Non-active contact tasks target the current robot-body pose.
+                    # Root initialization changes that FK pose, so refresh all
+                    # fine targets before either IK stage consumes them.
+                    self.update_targets(frame_idx)
                     self.update_coarse_targets(frame_idx)
                     coarse_solves = self.solve_ik_stage(
                         self.coarse_tasks,

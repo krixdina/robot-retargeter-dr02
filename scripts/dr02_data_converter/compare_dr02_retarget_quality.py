@@ -31,6 +31,8 @@ def _read_qpos_csv(path: Path, nq: int) -> np.ndarray:
     values = np.atleast_2d(values)
     if values.shape[1] != nq:
         raise ValueError(f"{path} has {values.shape[1]} columns; expected MuJoCo qpos nq={nq}")
+    if not np.all(np.isfinite(values)):
+        raise ValueError(f"{path} contains non-finite qpos values (NaN or Inf)")
     # Exported files store the floating quaternion as xyzw for common tooling;
     # RobotRetarget/MuJoCo consumes wxyz internally.
     qpos = values.copy()
@@ -115,7 +117,9 @@ def main() -> None:
             raise ValueError(f"{path} has {len(qpos)} frames; target PKL has {retargeter.num_frames}")
         report[label] = _motion_metrics(retargeter, qpos)
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
-    args.output_json.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+    args.output_json.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+    )
     if args.output_csv:
         args.output_csv.parent.mkdir(parents=True, exist_ok=True)
         with args.output_csv.open("w", newline="") as stream:

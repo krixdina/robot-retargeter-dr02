@@ -43,6 +43,8 @@ PYTHON_BIN=/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
   --output-json /tmp/eagle_quality.json --output-csv /tmp/eagle_quality.csv
 ```
 
+质量工具会在进入 MuJoCo 前拒绝 CSV 中的 `NaN` 或 `Inf`（以非零退出并说明输入包含非有限 qpos）；JSON 输出采用严格 JSON 编码，不会写出 `NaN`/`Infinity`。启用首帧二阶段时，root 初始化后会刷新普通与非激活接触目标，再进入 coarse/fine；第 1 帧及以后仍是原有时间约束路径。
+
 对已生成的结果进行非 GUI 校验：
 
 ```bash

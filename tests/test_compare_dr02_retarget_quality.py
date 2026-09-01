@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,6 +32,21 @@ class CompareDr02RetargetQualityTest(unittest.TestCase):
             np.savetxt(path, [[1, 2]], delimiter=",")
             with self.assertRaisesRegex(ValueError, "expected MuJoCo qpos"):
                 quality._read_qpos_csv(path, nq=8)
+
+    def test_read_qpos_csv_rejects_nan_and_inf_before_mujoco(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for value in (np.nan, np.inf):
+                path = Path(directory) / f"motion_{value}.csv"
+                np.savetxt(path, [[1, 2, 3, 0.1, 0.2, 0.3, 0.4, value]], delimiter=",")
+                with self.assertRaisesRegex(ValueError, "non-finite qpos"):
+                    quality._read_qpos_csv(path, nq=8)
+
+    def test_report_json_is_strictly_json_decodable(self):
+        payload = {"finite": True, "metric": 0.25, "velocity": {"max_excess": 0.0}}
+        encoded = json.dumps(payload, allow_nan=False)
+        self.assertEqual(json.loads(encoded), payload)
+        with self.assertRaises(ValueError):
+            json.dumps({"invalid": np.nan}, allow_nan=False)
 
 
 if __name__ == "__main__":
