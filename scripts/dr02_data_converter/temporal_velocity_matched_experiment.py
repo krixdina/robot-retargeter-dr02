@@ -231,6 +231,75 @@ def evaluate(args) -> None:
     (wd/"metric_sample_counts.json").write_text(json.dumps(audit,indent=2)+"\n")
     print(out)
 
+def independently_recompute_fidelity(cfg: dict, pkl: Path, qpos_path: Path) -> dict:
+    """Recompute the explicit tracking metrics in a separate FK pass.
+
+    This deliberately does not call ``evaluate_one`` nor reuse its error
+    collections.  It is the guard against reintroducing the former
+    prefix-based ``left_* -> left_arm`` aggregation bug.
+    """
+    r = make_retargeter(cfg, pkl)
+    q = read_qpos(qpos_path, r.model.nq)
+    pairs = {"four_ee": FOUR_EE, "upper_limb": UPPER_LIMB}
+    values = {group: {name: {"pos": [], "rot": []} for name in mapping}
+              for group, mapping in pairs.items()}
+    arcs = {name: [] for name in FOUR_EE}
+    for frame, qq in enumerate(q):
+        r.configuration.update(qq)
+        for group, mapping in pairs.items():
+            for name, (source, body) in mapping.items():
+                keypoint_index = r.keypoint_name_to_idx[source]
+                body_id = mujoco.mj_name2id(r.model, mujoco.mjtObj.mjOBJ_BODY, body)
+                body_pos = r.configuration.data.xpos[body_id].copy()
+                values[group][name]["pos"].append(
+                    float(np.linalg.norm(body_pos - r.keypoints_pos[frame, keypoint_index]) * 100.0)
+                )
+                values[group][name]["rot"].append(
+                    float(geodesic(r.configuration.data.xquat[body_id], r.keypoints_quat[frame, keypoint_index]))
+                )
+                if group == "four_ee":
+                    arcs[name].append(body_pos)
+    out = {}
+    for group, mapping in pairs.items():
+        for name in mapping:
+            out[f"{group}_{name}_pos_p95_cm"] = float(np.percentile(values[group][name]["pos"], 95, method="linear"))
+            out[f"{group}_{name}_rot_p95_deg"] = float(np.percentile(values[group][name]["rot"], 95, method="linear"))
+        out[f"{group}_pos_p95_cm"] = float(np.mean([out[f"{group}_{name}_pos_p95_cm"] for name in mapping]))
+        out[f"{group}_rot_p95_deg"] = float(np.mean([out[f"{group}_{name}_rot_p95_deg"] for name in mapping]))
+    for name, x in arcs.items():
+        out[f"four_ee_{name}_arc_m"] = float(np.linalg.norm(np.diff(x, axis=0), axis=1).sum())
+    return out
+
+def audit(args) -> None:
+    """Independently audit all saved qpos/PKL pairs against metrics.csv."""
+    wd = experiment_dir(args)
+    rows = json.loads((wd / "manifest.json").read_text())
+    with (wd / "metrics.csv").open(newline="") as f:
+        reported = {(x["candidate"], int(x["motion_id"])): x for x in csv.DictReader(f)}
+    checks, maximum = [], 0.0
+    for candidate in CANDIDATES:
+        cfg = resolved_config(candidate)
+        for motion in rows:
+            qpath = wd / "qpos" / candidate / f"{motion['id']:02d}_{Path(motion['source']).stem}.csv"
+            independent = independently_recompute_fidelity(cfg, wd / motion["pkl"], qpath)
+            prior = reported[(candidate, motion["id"])]
+            differences = {name: abs(value - float(prior[name])) for name, value in independent.items()}
+            maximum = max(maximum, *differences.values())
+            checks.append({"candidate": candidate, "motion_id": motion["id"],
+                           "four_ee_samples": 4 * int(prior["frames"]),
+                           "upper_limb_samples": 6 * int(prior["frames"]),
+                           "max_abs_difference": max(differences.values()),
+                           "passed": max(differences.values()) <= 1e-9})
+    out = wd / "independent_audit.csv"
+    with out.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(checks[0])); writer.writeheader(); writer.writerows(checks)
+    summary = {"rows": len(checks), "passed_rows": sum(x["passed"] for x in checks),
+               "max_abs_difference": maximum, "tolerance": 1e-9}
+    (wd / "independent_audit_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    if summary["passed_rows"] != len(checks):
+        raise RuntimeError(f"independent audit failed: {summary}")
+    print(out)
+
 def main():
-    p=argparse.ArgumentParser(); p.add_argument("command",choices=["prepare","run","evaluate"]); p.add_argument("--work-dir"); p.add_argument("--candidate",choices=list(CANDIDATES)); p.add_argument("--force",action="store_true"); a=p.parse_args(); {"prepare":prepare,"run":run,"evaluate":evaluate}[a.command](a)
+    p=argparse.ArgumentParser(); p.add_argument("command",choices=["prepare","run","evaluate","audit"]); p.add_argument("--work-dir"); p.add_argument("--candidate",choices=list(CANDIDATES)); p.add_argument("--force",action="store_true"); a=p.parse_args(); {"prepare":prepare,"run":run,"evaluate":evaluate,"audit":audit}[a.command](a)
 if __name__ == "__main__": main()
