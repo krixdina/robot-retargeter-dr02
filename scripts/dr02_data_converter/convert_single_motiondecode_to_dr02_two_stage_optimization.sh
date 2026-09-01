@@ -18,7 +18,10 @@ Options:
 
 The final comparison viewer is enabled by default.  This script uses the
 separate DR02_two_stage_optimization_test.yaml, so normal DR02.yaml behavior
-is never changed.  Set PYTHON_BIN to select a Python interpreter explicitly.
+is never changed.  Its two-stage mode is a first-frame-only initialization:
+coarse IK and a fine warm-start run only at frame 0; frame 1+ use the normal
+temporal and full-frame velocity-constrained IK path.  Set PYTHON_BIN to
+select a Python interpreter explicitly.
 EOF
 }
 

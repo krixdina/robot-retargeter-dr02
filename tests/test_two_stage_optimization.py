@@ -37,6 +37,9 @@ def make_owner(config):
     owner.coarse_ik_limits = []
     owner.coarse_max_additional_iterations = 0
     owner.coarse_convergence_threshold = 0.001
+    owner.two_stage_application = "first_frame_only"
+    owner.initialize_root_from_target = False
+    owner.root_target_keypoint = "hips_mean"
     owner.two_stage_enabled = False
     owner.setup_two_stage_optimization()
     return owner
@@ -93,11 +96,33 @@ class TwoStageOptimizationTest(unittest.TestCase):
                 {"enabled": True, "coarse": {"max_additional_iterations": 10, "convergence_threshold": 0.001,
                     "ik_match_table": {"missing": ["link", 0, 1]}}}
             )
-        with self.assertRaisesRegex(ValueError, "must be an integer"):
+        with self.assertRaisesRegex(ValueError, "non-negative integer"):
             make_owner(
                 {"enabled": True, "coarse": {"max_additional_iterations": 1.5, "convergence_threshold": 0.001,
                     "ik_match_table": {"elbow": ["link", 0, 1]}}}
             )
+        owner = make_owner(
+            {"enabled": True, "application": "first_frame_only", "coarse": {
+                "max_additional_iterations": 0, "convergence_threshold": 0.001,
+                "ik_match_table": {"elbow": ["link", 0, 1]},
+            }}
+        )
+        self.assertEqual(owner.coarse_max_additional_iterations, 0)
+        with self.assertRaisesRegex(ValueError, "application"):
+            make_owner({"enabled": True, "application": "every_frame", "coarse": {
+                "max_additional_iterations": 0, "convergence_threshold": 0.001,
+                "ik_match_table": {"elbow": ["link", 0, 1]},
+            }})
+        with self.assertRaisesRegex(ValueError, "initialize_root_from_target"):
+            make_owner({"enabled": True, "initialize_root_from_target": "yes", "coarse": {
+                "max_additional_iterations": 0, "convergence_threshold": 0.001,
+                "ik_match_table": {"elbow": ["link", 0, 1]},
+            }})
+        with self.assertRaisesRegex(ValueError, "root_target_keypoint"):
+            make_owner({"enabled": True, "initialize_root_from_target": True, "root_target_keypoint": "missing", "coarse": {
+                "max_additional_iterations": 0, "convergence_threshold": 0.001,
+                "ik_match_table": {"elbow": ["link", 0, 1]},
+            }})
 
     def test_gmr_style_coarse_tasks_are_isolated_and_have_explicit_weights(self):
         retargeter = self.make_retargeter()
@@ -113,7 +138,21 @@ class TwoStageOptimizationTest(unittest.TestCase):
         np.testing.assert_allclose(costs["left_fore_arm"][3:], [10, 10, 10])
         np.testing.assert_allclose(costs["left_calf"][:3], [50, 50, 50])
 
-    def test_short_two_stage_smoke_warm_starts_fine_and_enforces_full_frame_budget(self):
+    def test_root_initialization_uses_target_translation_and_yaw_only(self):
+        retargeter = self.make_retargeter()
+        target_pos, target_quat = retargeter._get_target_pose(0, "hips_mean")
+        retargeter._initialize_root_from_target(0)
+        np.testing.assert_allclose(retargeter.configuration.q[:3], target_pos)
+        expected_yaw = np.arctan2(
+            2.0 * (target_quat[0] * target_quat[3] + target_quat[1] * target_quat[2]),
+            1.0 - 2.0 * (target_quat[2] ** 2 + target_quat[3] ** 2),
+        )
+        np.testing.assert_allclose(
+            retargeter.configuration.q[3:7],
+            [np.cos(expected_yaw / 2.0), 0.0, 0.0, np.sin(expected_yaw / 2.0)],
+        )
+
+    def test_first_frame_only_warm_starts_fine_and_frame_one_is_legacy(self):
         retargeter = self.make_retargeter()
         retargeter.num_frames = 2
         retargeter.keypoints_pos = retargeter.keypoints_pos[:2]
@@ -138,43 +177,37 @@ class TwoStageOptimizationTest(unittest.TestCase):
             retargeter.retarget()
 
         self.assertEqual(len(retargeter.result_pos), 2)
-        self.assertEqual(len(calls), 4)
-        expected_previous_qs = [initial_q] + retargeter.result_pos[:-1]
-        for frame_idx, (coarse, fine) in enumerate(zip(calls[::2], calls[1::2])):
-            self.assertIs(coarse[0], retargeter.coarse_tasks)
-            self.assertIs(fine[0], retargeter.tasks)
-            # Fine keeps the coarse Configuration as its warm start, except for
-            # the deterministic projection needed to enter the hard full-frame
-            # velocity box anchored at the preceding output frame.
-            used = np.empty(retargeter.model.nv)
-            mujoco.mj_differentiatePos(
-                retargeter.model, used, 1.0, expected_previous_qs[frame_idx], coarse[2]
-            )
-            projected_q = coarse[2].copy()
-            correction = np.zeros(retargeter.model.nv)
-            indices = retargeter.frame_velocity_limit.indices
-            correction[indices] = np.clip(
-                used[indices],
-                -retargeter.frame_velocity_limit.frame_budget,
-                retargeter.frame_velocity_limit.frame_budget,
-            ) - used[indices]
-            mujoco.mj_integratePos(retargeter.model, projected_q, correction, 1.0)
-            np.testing.assert_allclose(fine[1], projected_q)
-            # Temporal and velocity anchors must be the prior data-frame result,
-            # rather than the intermediate coarse configuration.
-            np.testing.assert_allclose(fine[3], expected_previous_qs[frame_idx])
-            displacement = np.empty(retargeter.model.nv)
-            mujoco.mj_differentiatePos(
-                retargeter.model,
-                displacement,
-                1.0,
-                expected_previous_qs[frame_idx],
-                retargeter.result_pos[frame_idx],
-            )
-            np.testing.assert_array_less(
-                np.abs(displacement[retargeter.frame_velocity_limit.indices]),
-                retargeter.frame_velocity_limit.frame_budget + 1e-8,
-            )
+        self.assertEqual(len(calls), 2)
+        coarse, fine = calls
+        self.assertIs(coarse[0], retargeter.coarse_tasks)
+        self.assertIsNot(fine[0], retargeter.tasks)
+        self.assertFalse(any(isinstance(task, mink.PostureTask) for task in fine[0]))
+        self.assertTrue(all(target["task"] in fine[0] for target in retargeter.contact_targets))
+        self.assertFalse(
+            any(limit is retargeter.frame_velocity_limit
+                for limit in retargeter._fine_limits_for_initialization_frame())
+        )
+        # Fine receives the exact in-place coarse endpoint; there is no partial
+        # velocity-box projection on the initialization frame.
+        np.testing.assert_allclose(fine[1], coarse[2])
+        self.assertIsNone(fine[3])
+        # Frame 1 follows the legacy path and anchors the temporal/FVL terms to
+        # the finalized frame 0 result.
+        np.testing.assert_allclose(
+            retargeter.temporal_posture_task.target_q, retargeter.result_pos[0]
+        )
+        np.testing.assert_allclose(
+            retargeter.frame_velocity_limit.previous_q, retargeter.result_pos[0]
+        )
+        displacement = np.empty(retargeter.model.nv)
+        mujoco.mj_differentiatePos(
+            retargeter.model, displacement, 1.0, retargeter.result_pos[0], retargeter.result_pos[1]
+        )
+        np.testing.assert_array_less(
+            np.abs(displacement[retargeter.frame_velocity_limit.indices]),
+            retargeter.frame_velocity_limit.frame_budget + 1e-8,
+        )
+        self.assertFalse(np.allclose(initial_q, retargeter.result_pos[0]))
 
 
 if __name__ == "__main__":

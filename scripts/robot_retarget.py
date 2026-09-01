@@ -283,6 +283,9 @@ class RobotRetarget:
         self.coarse_ik_limits = []
         self.coarse_max_additional_iterations = 0
         self.coarse_convergence_threshold = 0.001
+        self.two_stage_application = "first_frame_only"
+        self.initialize_root_from_target = False
+        self.root_target_keypoint = "hips_mean"
         self.convergence_tasks = []
 
         self.robot_motor_names = {}
@@ -470,22 +473,41 @@ class RobotRetarget:
             raise ValueError(
                 "two_stage_optimization.coarse.ik_match_table must be a non-empty mapping"
             )
-        self.coarse_max_additional_iterations = int(
-            _finite_number(
-                coarse_config.get("max_additional_iterations"),
-                "two_stage_optimization.coarse.max_additional_iterations",
-                strictly_positive=True,
-            )
+        max_additional_iterations = _finite_number(
+            coarse_config.get("max_additional_iterations"),
+            "two_stage_optimization.coarse.max_additional_iterations",
         )
-        if self.coarse_max_additional_iterations != coarse_config.get("max_additional_iterations"):
+        self.coarse_max_additional_iterations = int(max_additional_iterations)
+        if self.coarse_max_additional_iterations < 0 or self.coarse_max_additional_iterations != max_additional_iterations:
             raise ValueError(
-                "two_stage_optimization.coarse.max_additional_iterations must be an integer"
+                "two_stage_optimization.coarse.max_additional_iterations must be a non-negative integer"
             )
         self.coarse_convergence_threshold = _finite_number(
             coarse_config.get("convergence_threshold"),
             "two_stage_optimization.coarse.convergence_threshold",
             strictly_positive=True,
         )
+
+        application = config.get("application", "first_frame_only")
+        if application != "first_frame_only":
+            raise ValueError(
+                "two_stage_optimization.application must be 'first_frame_only'"
+            )
+        self.two_stage_application = application
+
+        initialize_root = config.get("initialize_root_from_target", False)
+        if not isinstance(initialize_root, (bool, np.bool_)):
+            raise ValueError("two_stage_optimization.initialize_root_from_target must be a bool")
+        self.initialize_root_from_target = bool(initialize_root)
+        root_target_keypoint = config.get("root_target_keypoint", "hips_mean")
+        if not isinstance(root_target_keypoint, str) or not root_target_keypoint:
+            raise ValueError("two_stage_optimization.root_target_keypoint must be a non-empty string")
+        if self.initialize_root_from_target and root_target_keypoint not in self.keypoint_name_to_idx:
+            raise ValueError(
+                "two_stage_optimization.root_target_keypoint contains unknown keypoint: "
+                f"{root_target_keypoint!r}"
+            )
+        self.root_target_keypoint = root_target_keypoint
 
         for keypoint_name, entry in match_table.items():
             if keypoint_name not in self.keypoint_name_to_idx:
@@ -538,6 +560,53 @@ class RobotRetarget:
         for keypoint_name, task in self.coarse_human_body_to_task.items():
             target_pos, target_quat = self._get_target_pose(frame_idx, keypoint_name)
             task.set_target(mink.SE3.from_rotation_and_translation(mink.SO3(target_quat), target_pos))
+
+    def _should_run_coarse_stage(self, frame_idx):
+        """Return whether the optional GMR-style initialization belongs to this frame."""
+        return self.two_stage_enabled and self.two_stage_application == "first_frame_only" and frame_idx == 0
+
+    def _initialize_root_from_target(self, frame_idx):
+        """Initialize a free root from target translation and yaw before the first coarse solve.
+
+        MuJoCo qpos free-joint quaternions are wxyz.  SciPy expects xyzw, so the
+        conversion is explicit before extracting yaw; roll and pitch are then
+        intentionally discarded to keep the floating base upright.
+        """
+        if not self.initialize_root_from_target:
+            return
+        free_joint_ids = np.flatnonzero(self.model.jnt_type == mujoco.mjtJoint.mjJNT_FREE)
+        if len(free_joint_ids) != 1:
+            raise ValueError(
+                "two_stage_optimization.initialize_root_from_target requires exactly one free joint"
+            )
+        target_pos, target_quat_wxyz = self._get_target_pose(frame_idx, self.root_target_keypoint)
+        target_pos = np.asarray(target_pos, dtype=float)
+        target_quat_wxyz = np.asarray(target_quat_wxyz, dtype=float)
+        if target_pos.shape != (3,) or not np.all(np.isfinite(target_pos)):
+            raise ValueError("two_stage_optimization root target position must be three finite values")
+        if target_quat_wxyz.shape != (4,) or not np.all(np.isfinite(target_quat_wxyz)):
+            raise ValueError("two_stage_optimization root target quaternion must be four finite values")
+        quat_norm = np.linalg.norm(target_quat_wxyz)
+        if quat_norm <= np.finfo(float).eps:
+            raise ValueError("two_stage_optimization root target quaternion must be non-zero")
+        target_quat_wxyz = target_quat_wxyz / quat_norm
+        target_quat_xyzw = np.r_[target_quat_wxyz[1:], target_quat_wxyz[0]]
+        yaw = Rot.from_quat(target_quat_xyzw).as_euler("xyz")[2]
+        root_qpos_adr = self.model.jnt_qposadr[free_joint_ids[0]]
+        initialized_q = self.configuration.q.copy()
+        initialized_q[root_qpos_adr:root_qpos_adr + 3] = target_pos
+        initialized_q[root_qpos_adr + 3:root_qpos_adr + 7] = (
+            np.cos(yaw / 2.0), 0.0, 0.0, np.sin(yaw / 2.0)
+        )
+        self.configuration.update(initialized_q)
+
+    def _fine_tasks_for_initialization_frame(self):
+        """Return normal frame/contact tasks without temporal posture regularization."""
+        return [task for task in self.tasks if task is not self.temporal_posture_task]
+
+    def _fine_limits_for_initialization_frame(self):
+        """Return normal limits except the prior-frame velocity constraint."""
+        return [limit for limit in self.ik_limits if limit is not self.frame_velocity_limit]
 
     @staticmethod
     def _task_error(configuration, tasks):
@@ -641,34 +710,6 @@ class RobotRetarget:
             self.temporal_posture_task.set_target(previous_q)
         if self.frame_velocity_limit is not None:
             self.frame_velocity_limit.begin_frame(previous_q)
-
-    def project_coarse_warm_start_to_frame_budget(self):
-        """Keep a coarse warm start inside the fine stage's prior-frame velocity box.
-
-        The coarse QP deliberately has no FrameVelocityLimit.  If it moves a
-        fine-limited joint beyond the budget anchored before coarse solving, the
-        subsequent fine QP can become numerically infeasible near a joint limit.
-        This projection changes only those selected tangent coordinates; all
-        other coarse results remain the fine-stage initial configuration.
-        """
-        limit = self.frame_velocity_limit
-        if limit is None:
-            return
-        if limit.previous_q is None:
-            raise RuntimeError("begin_temporal_frame must run before coarse projection")
-        used_displacement = np.empty(self.model.nv)
-        mujoco.mj_differentiatePos(
-            self.model, used_displacement, 1.0, limit.previous_q, self.configuration.q
-        )
-        used = used_displacement[limit.indices]
-        clipped = np.clip(used, -limit.frame_budget, limit.frame_budget)
-        if np.array_equal(used, clipped):
-            return
-        correction = np.zeros(self.model.nv)
-        correction[limit.indices] = clipped - used
-        projected_q = self.configuration.q.copy()
-        mujoco.mj_integratePos(self.model, projected_q, correction, 1.0)
-        self.configuration.update(projected_q)
 
     # 用途：为可识别的接触 body 预先创建位置锁定任务，并保存每段连续接触所需的固定目标位置。
     # 不直接返回数值；会向 self.contact_targets（接触约束描述的列表）加入可用接触项，并将对应的位置任务加入总 IK 任务集合。
@@ -1062,12 +1103,11 @@ class RobotRetarget:
             for frame_idx in tqdm(range(self.num_frames), desc="Retargeting", unit="frame"):
                 start_time = time.time()
                 self.update_targets(frame_idx)
-                if self.two_stage_enabled:
-                    # GMR's first stage updates the same Configuration in place.
-                    # It receives only coarse FrameTasks plus joint-range limits.
-                    # Anchor fine temporal/velocity terms to the preceding data-frame
-                    # result before coarse changes the shared Configuration.
-                    self.begin_temporal_frame()
+                if self._should_run_coarse_stage(frame_idx):
+                    # This compatibility mode intentionally uses GMR-style coarse
+                    # IK only for the initial pose.  Later frames retain the
+                    # established temporal/FVL single-stage trajectory semantics.
+                    self._initialize_root_from_target(frame_idx)
                     self.update_coarse_targets(frame_idx)
                     coarse_solves = self.solve_ik_stage(
                         self.coarse_tasks,
@@ -1076,11 +1116,15 @@ class RobotRetarget:
                         self.coarse_max_additional_iterations,
                         self.coarse_convergence_threshold,
                     )
-                    self.project_coarse_warm_start_to_frame_budget()
-                    # Fine starts from coarse's in-place result, while its temporal
-                    # target and velocity budget remain anchored to the prior frame.
+                    # Fine starts exactly at the coarse endpoint.  Frame zero has
+                    # no preceding data frame, so neither temporal posture nor the
+                    # inter-frame velocity box participates in this initialization.
                     fine_solves = self.solve_ik_stage(
-                        self.tasks, self.convergence_tasks, self.ik_limits, self.max_iter, 0.001
+                        self._fine_tasks_for_initialization_frame(),
+                        self.convergence_tasks,
+                        self._fine_limits_for_initialization_frame(),
+                        self.max_iter,
+                        0.001,
                     )
                     self.frame_ik_iteration_counts.append(coarse_solves + fine_solves)
                 else:
