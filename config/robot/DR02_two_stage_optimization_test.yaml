@@ -70,11 +70,11 @@ two_stage_optimization:
 # Fine stage only: the coarse stage never receives these objects.
 temporal_continuity_regularization:
   enabled: true
-  cost: 6.5
+  cost: 10.0
   joint_name_substrings: ["shoulder", "elbow", "wrist"]
 
 inter_frame_velocity_limit:
   enabled: true
   joint_velocity_limits:
-    shoulder: 4.0
-    elbow: 4.0
+    shoulder: 8.0
+    elbow: 10.0

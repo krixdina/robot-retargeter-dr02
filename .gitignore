@@ -41,6 +41,7 @@ output_data/
 # ---- Logs / temp ----
 *.log
 *.tmp
+*.pdf
 *.zip
 MUJOCO_LOG.TXT
 

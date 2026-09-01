@@ -20,7 +20,7 @@ PYTHON_BIN=/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
   bash scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_two_stage_optimization.sh \
   --input 'dataset/MotionDecode/samples/4.Martial_Arts/Eagle_Claw_Fist_2/MA_Eagle_Claw_Fist_2.csv' \
   --fps 120 \
-  --output-name eagle_claw_fist_2_two_stage
+  --overwrite
 ```
 
 - `--input PATH`：必填，MotionDecode 的 G1 CSV。

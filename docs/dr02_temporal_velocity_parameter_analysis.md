@@ -1,35 +1,35 @@
-# DR02 时间连续性与帧间速度参数完整 QA 分析
+# DR02 temporal / velocity parameter full-QA analysis
 
-运行日期：2026-08-31。本报告针对 `command.md` 中列出的 25 条肉眼可见关节异常动作进行了完整重跑分析；用户修改过的 YAML 和所有功能代码均保持不变。
+Run date: 2026-08-31. This is a full rerun analysis of the 25 visibly abnormal motions listed in `command.md`; the user-edited YAML and all functional code remain unchanged.
 
-## 结论
+## Decision
 
-**用于软件测试的条件性推荐：`cost=10`、肩关节 `8 rad/s`、肘关节 `8 rad/s`（B2）。**
+**Conditional software-test recommendation: `cost=10`, shoulder `8 rad/s`, elbow `8 rad/s` (B2).**
 
-在本次测试的、带速度约束的非支配候选中，B2 是跟踪误差最低的方案。未经硬件验证，不应直接将这组参数复制到机器人安全配置中。如果更重视肘关节的保守性，而能够接受小幅跟踪精度损失，可使用 **B3（`c=10,s=8,e=6`）**；如果可以接受高于 `8 rad/s` 的肘关节速度限制，则 **B4（`c=10,s=8,e=10`）** 的跟踪指标略好，但从安全优先的角度并不值得优先选择。`c=6.5,s=4,e=4` 可作为有意设置得更保守的备选方案，但会付出明显的跟踪和动作幅度代价。
+This is the lowest-error member among the tested, velocity-bounded non-dominated candidates.  It should not be copied to a robot safety configuration without hardware validation.  If elbow conservatism is more important than the small tracking difference, use **B3 (`c=10,s=8,e=6`)**; if an elbow limit above 8 rad/s is acceptable, **B4 (`c=10,s=8,e=10`)** has the slightly best tracking figures but is not preferable on a safety-first criterion.  `c=6.5,s=4,e=4` is a deliberately more conservative fallback, at a substantial tracking/motion penalty.
 
-本次测试的所有参数都没有解决底层的可达性或关节活动范围问题：肩关节硬限位接触仍主要集中在网球发球动作中，肘关节接触则集中在少数剧烈手臂动作中。因此，这里给出的是条件性推荐，而不是最终调参已经完成的结论。
+No tested setting cures the underlying reachability/range issue: shoulder hard-limit contact remains concentrated in the tennis serve and elbow contact remains concentrated in particular violent arm actions.  This is why the recommendation is conditional, rather than a claim of final tuning.
 
-## 范围、输入与重要的可比性说明
+## Scope, inputs, and important comparability qualification
 
-`command.md` 中包含 25 条编号 QA 动作：其中 24 条以肩关节异常为主，只有第 25 条（`MA_Long_Fist_6`）以肘关节异常为主。因此，这组数据适合作为肩关节回归测试集，但在统计上不足以均衡地选择肘关节速度限制。每条动作的源文件、QA 重点帧和原始异常现象均定义在 `command.md` 中；每个完整候选都使用了全部 25 条动作。
+`command.md` contains 25 numbered QA actions: 24 are shoulder-led cases and only #25 (`MA_Long_Fist_6`) is elbow-led.  Consequently the set is deliberately useful for shoulder regression testing but is statistically unbalanced for selecting an elbow limit.  The source action, QA focus frame, and original symptom are defined in `command.md`; all 25 rows were used in each completed candidate.
 
-| ID | 候选方案 | 时间连续性 cost | 肩关节限制 | 肘关节限制 | 动作数 |
+| ID | candidate | temporal cost | shoulder limit | elbow limit | rows |
 |---|---|---:|---:|---:|---:|
-| B0 | 历史基线 QA CSV | — | — | — | 25 |
+| B0 | historical baseline QA CSV | — | — | — | 25 |
 | B1 | `c6p5_s4_e4` | 6.5 | 4 | 4 | 25 |
 | B2 | `c10_s8_e8` | 10 | 8 | 8 | 25 |
 | B3 | `c10_s8_e6` | 10 | 8 | 6 | 25 |
 | B4 | `c10_s8_e10` | 10 | 8 | 10 | 25 |
 | B5 | `c12_s8_e8` | 12 | 8 | 8 | 25 |
 
-B1–B5 均是在相应参数下进行的完整重跑。**B0 并不是在相同代码版本下关闭约束后重新求解得到的结果**，而是项目中已有的 QA 目标 CSV 测量结果。因此，B0 可以作为历史异常程度参考，也可作为动作弧长和关节活动幅度比值的分母，但不能把 B0 到 Bx 的差异解释为时间连续性和速度约束单独造成的、受控的因果变化。
+The B1–B5 files are full reruns under the respective settings. **B0 is not a same-version re-solve with constraints disabled**: it is the pre-existing QA target-CSV measurement.  Therefore it is a useful historical severity reference (and the denominator for arc/range ratios), but B0-to-Bx deltas must not be interpreted as a controlled causal estimate of temporal/velocity constraints alone.
 
-源结果文件（每个文件包含一行表头和 25 行数据）为：`/tmp/dr02_tuning_full_B0_baseline.csv`、`/tmp/dr02_tuning_full_B1_c6p5_s4_e4.csv`、`/tmp/dr02_tuning_full_B2_c10_s8_e8.csv`、`/tmp/dr02_tuning_full_B3_c10_s8_e6.csv`、`/tmp/dr02_tuning_full_B4_c10_s8_e10.csv` 和 `/tmp/dr02_tuning_full_B5_c12_s8_e8.csv`。这六个文件精确合并后的 150 行结果（保留所有原始列并增加 `candidate` 列）已归档到 `docs/data/dr02_temporal_velocity_full_results.csv`。
+Source results (each has one header plus 25 rows): `/tmp/dr02_tuning_full_B0_baseline.csv`, `/tmp/dr02_tuning_full_B1_c6p5_s4_e4.csv`, `/tmp/dr02_tuning_full_B2_c10_s8_e8.csv`, `/tmp/dr02_tuning_full_B3_c10_s8_e6.csv`, `/tmp/dr02_tuning_full_B4_c10_s8_e10.csv`, and `/tmp/dr02_tuning_full_B5_c12_s8_e8.csv`.  Their exact 150-row union (including all original columns plus `candidate`) is archived at `docs/data/dr02_temporal_velocity_full_results.csv`.
 
-## 参数语义与配置审查
+## Semantics and configuration audit
 
-当前使用的 YAML 为 `config/robot/DR02_temporal_constraints_test.yaml`：
+The active YAML is `config/robot/DR02_temporal_constraints_test.yaml`:
 
 ```yaml
 temporal_continuity_regularization:
@@ -41,91 +41,91 @@ inter_frame_velocity_limit:
   joint_velocity_limits: {shoulder: 4.0, elbow: 4.0}
 ```
 
-`cost=c` 是 Mink 对残差的缩放系数，而不是最小二乘目标中的直接系数。它对平方目标函数的贡献为 `||c e||²`，也就是 **c²**。因此，0.05 对应 0.0025，6.5 对应 42.25，10 对应 100，12 对应 144。早期的 `0.05` 只是初始测试 YAML 中使用的量级，早期的 `10` 也只是粗筛选候选；两者都不能证明该正则系数经过了物理标定。尤其是相对于其他任务残差的尺度，0.05 实际上几乎不起作用，不应把它描述为具有实际意义的连续性设置。
+`cost=c` is Mink's residual scaling, not the direct least-squares coefficient: its squared-objective contribution is `||c e||²`, i.e. **c²**.  Thus 0.05 means 0.0025, 6.5 means 42.25, 10 means 100, and 12 means 144.  The early `0.05` value was an initial/test-YAML-scale value, while the early `10` was a coarse screening candidate; neither is evidence of a physically calibrated regularization coefficient.  In particular, 0.05 is effectively negligible relative to the task residual scales and must not be described as a meaningful continuity setting.
 
-当前时间连续性正则的关节选择器还包括 **wrist（腕关节）**。不过，报告中的 `qdot`、速度预算贴边率和 `qddot` 诊断均根据 `frame_velocity_limit.indices` 计算，也就是只统计**肩关节和肘关节（S/E）**。由于 IK 是耦合求解的，腕关节连续性仍可能间接改变肩肘诊断结果，也可能改变跟踪误差、手部轨迹弧长和关节活动幅度。因此，本次结果支持的是“肩/肘/腕时间连续性正则 + 肩/肘速度限制”的组合配置，不能将结果归因于纯粹的肩肘时间连续性正则。
+The current temporal selector includes **wrist** joints.  The reported `qdot`, speed-edge, and `qddot` diagnostics are nevertheless computed from `frame_velocity_limit.indices`, i.e. **shoulder/elbow (S/E) only**.  Wrist continuity can still change those S/E diagnostics indirectly through the coupled IK solution, and can change tracking, hand arc, and range.  Results therefore support this *combined temporal (shoulder/elbow/wrist) + shoulder/elbow velocity* configuration, not a result attributable to a pure S/E temporal regularizer.
 
-本次实验没有证明 `4 rad/s` 具备 DR02 硬件依据。它只是一个软件测试边界，6、8、10 rad/s 同样如此。现有的 19.38 rad/s 执行器参数只能作为已提供的参考值，不能证明关节、控制器、热管理、碰撞或负载条件下的认证能力。不能将上述任一数值视为硬件安全速度限制。
+The `4 rad/s` limit has no demonstrated DR02 hardware basis in this experiment.  It is a software test bound, as are 6/8/10 rad/s.  The available 19.38 rad/s actuator figure is only a supplied reference, not proof of certified joint, controller, thermal, collision, or payload capability.  Do not treat any of these as hardware-safe operating limits.
 
-## 指标与聚合方式
+## Metrics and aggregation
 
-每条动作的 CSV 都记录了双臂和双手的笛卡尔位置及姿态 P95 误差；`near` 和 `hard` 分别表示接近关节限位和接触关节硬限位的比例；最长连续段以帧为单位；有限差分按 120 Hz 计算。下文的“跟踪 P95”是每条动作中四项位置 P95（双臂、双手）的平均值；“姿态 P95”采用相同方式计算。该指标用于候选间比较，并不是把所有样本合并后重新计算得到的总体 P95。
+Each per-motion CSV reports P95 Cartesian/orientation errors for both arms and hands; `near` and `hard` are joint-limit proximity/contact fractions; longest runs are frames; finite differences use 120 Hz.  “Track P95” below is the mean of the four per-motion P95 position values (two arms, two hands); “rot P95” is analogous.  It is a comparison statistic, not a pooled sample P95.
 
-报告同时使用两种聚合方式：
+Two aggregations are reported:
 
-* **动作等权：** 对 25 条动作逐行进行算术平均，每条动作的影响相同。
-* **帧等权：** 按每条动作的帧数加权，较长的动作具有更大影响。
+* **Action-equal:** arithmetic mean of the 25 motion rows; every motion has equal influence.
+* **Frame-equal:** each row weighted by its number of frames; long clips have more influence.
 
-之所以必须区分这两种方式，是因为 `DAN_running` 包含 14,146 帧，而部分体育动作只有约 1,000 帧。两种口径下的候选排序基本能够支持对 B2 的条件性推荐，但任何部署决策都应保留动作等权结果，避免长动作主导结论。
+This distinction matters here because `DAN_running` has 14,146 frames whereas some sports clips have about 1,000.  Candidate ordering is stable enough for the conditional B2 recommendation, but all deployment decisions should retain the action-equal view.
 
-## 聚合结果
+## Aggregate results
 
-### 动作等权（主要口径）
+### Action-equal (primary)
 
-| 候选方案 | 跟踪 P95 cm ↓ | 姿态 P95° ↓ | 肩硬限位 % ↓ | 肩硬限位最长段 ↓ | 肘硬限位 % ↓ | 肘硬限位最长段 ↓ | qdot P95 | 速度贴边率 % ↓ | qddot P95 ↓ | 弧长/B0 ↑ | 活动幅度/B0 ↑ |
+| candidate | track P95 cm ↓ | rot P95° ↓ | shoulder hard % ↓ | shoulder hard run ↓ | elbow hard % ↓ | elbow hard run ↓ | qdot P95 | edge % ↓ | qddot P95 ↓ | arc / B0 ↑ | range / B0 ↑ |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| B0 历史基线 | 8.57 | 42.50 | 30.80 | 623 | 20.12 | 275 | 7.59 | 14.71 | 304.9 | 1.000 | 1.000 |
+| B0 historical | 8.57 | 42.50 | 30.80 | 623 | 20.12 | 275 | 7.59 | 14.71 | 304.9 | 1.000 | 1.000 |
 | B1 c6.5/s4/e4 | 16.05 | 61.90 | **15.99** | **276** | 10.13 | 158 | 4.00 | 19.80 | 69.9 | 0.950 | **0.877** |
 | **B2 c10/s8/e8** | **12.92** | 62.75 | 19.08 | 309 | 10.86 | 166 | 5.73 | 2.49 | 67.5 | 0.973 | 0.797 |
 | B3 c10/s8/e6 | 13.16 | 63.00 | 19.02 | 308 | 10.52 | 165 | **5.45** | 3.39 | **66.4** | 0.972 | **0.800** |
 | B4 c10/s8/e10 | **12.84** | **62.60** | 18.94 | 309 | 10.98 | 166 | 5.70 | **2.14** | 68.1 | **0.973** | 0.795 |
 | B5 c12/s8/e8 | 14.15 | 66.03 | 17.58 | 301 | **9.53** | **157** | 5.00 | **1.44** | **56.8** | 0.960 | 0.760 |
 
-“速度贴边率”是评估程序根据 `frame_velocity_limit.indices` 计算的肩肘速度预算边缘统计量；`qdot` 和 `qddot` 使用相同的肩肘诊断集合。B1–B5 均报告零个分支跳变帧和零次分支跳变事件；B0 的动作平均值分别为 6.12 帧和 11.56 次。速度最大值贴近约束，说明约束确实被激活，但不能视为硬件验证结果。由于 IK 求解相互耦合，腕关节时间连续性正则仍会混杂对这些结果的解释。
+“edge %” is the runner's S/E speed-budget edge statistic, calculated from `frame_velocity_limit.indices`; `qdot` and `qddot` use the same S/E diagnostic set.  All B1–B5 runs report zero branch-jump frames/events; B0 reports 6.12/11.56 per action on average.  The maxima are constraint-active, not hardware validation.  The interpretation remains confounded by wrist temporal regularization because the IK solution is coupled.
 
-### 帧等权敏感性检查
+### Frame-equal sensitivity check
 
-| 候选方案 | 跟踪 P95 cm ↓ | 姿态 P95° ↓ | 肩硬限位 % ↓ | 肘硬限位 % ↓ | qdot P95 | qddot P95 ↓ | 弧长/B0 ↑ | 活动幅度/B0 ↑ |
+| candidate | track P95 cm ↓ | rot P95° ↓ | shoulder hard % ↓ | elbow hard % ↓ | qdot P95 | qddot P95 ↓ | arc / B0 ↑ | range / B0 ↑ |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| B0 历史基线 | 8.20 | 34.37 | 22.76 | 16.06 | 8.56 | 338.1 | 1.000 | 1.000 |
+| B0 historical | 8.20 | 34.37 | 22.76 | 16.06 | 8.56 | 338.1 | 1.000 | 1.000 |
 | B1 c6.5/s4/e4 | 16.77 | 61.82 | **11.63** | 8.51 | 4.00 | 79.1 | 0.939 | **0.908** |
 | **B2 c10/s8/e8** | 13.44 | 63.36 | 14.46 | 8.72 | 6.18 | 74.1 | 0.965 | 0.814 |
 | B3 c10/s8/e6 | 13.72 | 63.67 | 14.42 | **8.39** | **5.82** | **73.1** | 0.963 | **0.819** |
 | B4 c10/s8/e10 | **13.36** | **63.18** | 14.30 | 8.86 | 6.15 | 74.7 | **0.965** | 0.813 |
 | B5 c12/s8/e8 | 14.89 | 67.13 | 13.47 | **7.53** | 5.38 | **62.3** | 0.953 | 0.780 |
 
-将 `c` 从 10 提高到 12，可以改善限位接触、速度和加速度指标，但与 B2 相比，动作等权跟踪误差约增加 1.2 cm，手臂关节活动幅度约降低 4.3 个百分点。将肘关节限制从 8 降至 6（B2→B3）会带来幅度较小但方向一致的跟踪损失，同时没有改善肩关节指标；只有在确实需要更保守的肘关节限制时，这种选择才有意义。将肘关节限制从 8 提高到 10（B2→B4）只能获得很小的跟踪改善，却放宽了肘关节速度上限。
+Increasing `c` from 10 to 12 improves limit/speed/acceleration measures but loses roughly 1.2 cm action-equal tracking and 4.3 percentage points of arm range relative to B2.  Reducing elbow limit 8→6 (B2→B3) has a small but directionally consistent tracking penalty and does not improve shoulder metrics; it only makes sense when the elbow-specific conservatism is required.  Raising elbow 8→10 (B2→B4) offers only marginal tracking gains while relaxing the requested elbow cap.
 
-## 硬性门槛与非支配解分析
+## Hard gates and non-dominated view
 
-B1–B5 均满足以下数值求解和输出门槛：25/25 条动作均完成、报告值均为有限数，并且没有检测到分支跳变帧或事件。这些并不是机器人安全门槛。对于肩肘速度门槛，本报告显式采用 **`2e-4 rad/s`** 的数值容差。相对于各自配置上限，观测到的最大超限分别为：B1 `+1.09828e-4`、B2 `+6.85967e-5`、B3 `+6.54092e-5`、B4 在当前输出精度下约为 `+0`（10.000000000000）、B5 `+5.53038e-6 rad/s`。因此，所有候选只是在考虑数值容差后通过速度检查；如果要求严格零超限，则并非所有候选都能通过。**所有候选均未通过持续贴限门槛**：最差的连续硬限位接触持续了数百帧（B2/B3/B4：肩关节 790 帧、肘关节 481 帧；B5：肩关节 788 帧、肘关节 475 帧）。没有候选能够通过“完全不接触硬限位”之类更严格的可行性门槛；即使是 B5，动作等权的肩、肘硬限位接触比例仍分别为 17.58% 和 9.53%。
+The numerical solver/output gates satisfied by all B1–B5 are: 25/25 completed rows, finite reported values, and zero branch-jump frames/events.  These are not robot-safety gates.  For the S/E speed gate, use an explicit numerical tolerance of **2e-4 rad/s**: observed maximum exceedances versus the applicable configured cap are B1 `+1.09828e-4`, B2 `+6.85967e-5`, B3 `+6.54092e-5`, B4 approximately `+0` at printed precision (10.000000000000), and B5 `+5.53038e-6 rad/s`.  Thus all candidates pass only the *tolerance-based* numerical speed check; they would not all pass a strict zero-exceedance check.  **Every candidate fails the limit-persistence gate**: its worst continuous hard-limit run is hundreds of frames (B2/B3/B4: shoulder 790 frames and elbow 481; B5: shoulder 788 and elbow 475).  No candidate passes a stronger feasibility gate such as “no hard-limit contact”: even B5 retains 17.58% shoulder and 9.53% elbow action-equal hard contact.
 
-同样，B2–B5 的有限差分峰值加速度仍达到 **1920 rad/s²**。B4 和 B5 也存在这一峰值，因此不能根据本次调参结果称它们足够平滑或安全。持续贴限和加速度门槛均未通过，这意味着不能声称异常已经解决；本次参数选择只能视为有明确边界的软件测试折中。
+Likewise, B2–B5 retain a **1920 rad/s² peak finite-difference acceleration**.  In particular B4 and B5 have this peak, so neither can be described as smooth enough or safe based on this tuning.  The limit and acceleration gate failures rule out any claim that the anomaly has been solved; the parameter choice is only a bounded software-test trade-off.
 
-在 B1–B5 中，没有任何一个候选能够同时最小化跟踪误差、肩肘限位接触、动作保持损失、速度和加速度。考虑这些相互竞争的目标后，实际的非支配候选集合为 **B1、B2、B3、B4、B5**：
+Among B1–B5, no single candidate minimizes tracking error, both joint contact measures, motion preservation, and speed/acceleration simultaneously.  The practical non-dominated set is **B1, B2, B3, B4, B5** under those competing objectives:
 
-* B1 在速度保守性和动作幅度保持方面较好，但跟踪表现明显弱于 B2/B4，并且更容易引入滞后或动作停滞风险。
-* B2 是肩肘均为 8 rad/s 的均衡选择，并且在肘关节限制不高于 8 rad/s 的候选中跟踪表现最好。
-* B3 以小幅跟踪损失换取 6 rad/s 的肘关节限制。
-* B4 的跟踪表现最好，但把肘关节限制放宽到了 10 rad/s。
-* B5 在数项平滑性和限位接触指标上较好，但对动作的正则化过强，在带速度约束的候选中跟踪表现最差。
+* B1 wins conservatism and preserved range, but is clearly dominated in tracking by B2/B4 and is more likely to introduce lag/freeze.
+* B2 is the balanced 8/8 choice and has the best tracking among candidates with elbow ≤8.
+* B3 trades a small amount of tracking for elbow cap 6.
+* B4 has the best tracking but relaxes elbow to 10.
+* B5 wins several smoothness/contact metrics but over-regularizes motion and has the worst tracking among bounded candidates.
 
-“非支配”结论依赖于同时保留物理限位接触和动作幅度保持等目标。如果唯一目标是跟踪 P95，则 B4 最好；如果只关注平滑性或限位接触，则 B5 或 B1 更好。这正是本报告只能给出条件性推荐的原因。
+The “non-dominated” label depends on retaining physical-limit/contact and motion-preservation objectives.  If the only objective were track P95, B4 wins; if it were only smoothness/contact, B5/B1 would win.  This is precisely why the recommendation is conditional.
 
-## 需要重点复查的最差案例
+## Worst cases requiring review
 
-下表给出了每个候选在所关注异常类型上的最差动作；这并不意味着其他动作都已达到可接受水平。
+The following table gives the per-candidate worst observed action for the requested failure modes (not a statement that every other action is acceptable).
 
-| 候选方案 | 最差跟踪 P95（cm） | 最差肩硬限位比例/最长段 | 最差肘硬限位比例/最长段 | 最大加速度案例 |
+| candidate | worst track P95 (cm) | worst shoulder hard % / run | worst elbow hard % / run | max acceleration case |
 |---|---|---|---|---|
-| B0 | #1 鹰爪拳 19.85 | #1 鹰爪拳 90.83% / 3614 | #1 鹰爪拳 42.93% / #14 戏剧动作 596 | #4 长拳 3，49,272 rad/s² |
-| B1 | #1 鹰爪拳 25.97 | #5 发球 00005 53.62% / 778 | #2 发球 00155 38.45% / #22 螳螂拳 485 | #1 鹰爪拳，960 rad/s² |
-| B2 | #17 长拳 11 19.04 | #5 发球 00005 54.45% / 790 | #2 发球 00155 34.81% / #22 螳螂拳 481 | #1 鹰爪拳，1920 rad/s² |
-| B3 | #17 长拳 11 19.36 | #5 发球 00005 54.45% / 790 | #2 发球 00155 34.91% / #22 螳螂拳 481 | #1 鹰爪拳，1920 rad/s² |
-| B4 | #17 长拳 11 18.93 | #5 发球 00005 54.45% / 790 | #2 发球 00155 34.61% / #22 螳螂拳 481 | #1 鹰爪拳，1920 rad/s² |
-| B5 | #17 长拳 11 20.44 | #5 发球 00005 54.31% / 788 | #10 扣杀 00112 33.47% / #22 螳螂拳 475 | #3 杀球 00221，1920 rad/s² |
+| B0 | #1 Eagle Claw 19.85 | #1 Eagle Claw 90.83% / 3614 | #1 Eagle Claw 42.93% / #14 Theatrical 596 | #4 Long Fist 3, 49,272 rad/s² |
+| B1 | #1 Eagle Claw 25.97 | #5 Serve 00005 53.62% / 778 | #2 Serve 00155 38.45% / #22 Mantis 485 | #1 Eagle Claw, 960 rad/s² |
+| B2 | #17 Long Fist 11 19.04 | #5 Serve 00005 54.45% / 790 | #2 Serve 00155 34.81% / #22 Mantis 481 | #1 Eagle Claw, 1920 rad/s² |
+| B3 | #17 Long Fist 11 19.36 | #5 Serve 00005 54.45% / 790 | #2 Serve 00155 34.91% / #22 Mantis 481 | #1 Eagle Claw, 1920 rad/s² |
+| B4 | #17 Long Fist 11 18.93 | #5 Serve 00005 54.45% / 790 | #2 Serve 00155 34.61% / #22 Mantis 481 | #1 Eagle Claw, 1920 rad/s² |
+| B5 | #17 Long Fist 11 20.44 | #5 Serve 00005 54.31% / 788 | #10 Spike 00112 33.47% / #22 Mantis 475 | #3 Smash 00221, 1920 rad/s² |
 
-对于 B2，应重点复查：第 17 条的跟踪情况、第 5 条的肩关节饱和、第 2 条和第 22 条的肘关节饱和、第 1 条的加速度和原始严重肩关节问题，以及第 25 条（`MA_Long_Fist_6`），因为它是唯一一条以肘关节异常为主的动作。由于 25 条动作的组成明显偏向肩关节，除这些少数案例外，当前证据不足以充分确定普适的肘关节速度限制。
+For B2 specifically, review #17 for tracking, #5 for shoulder saturation, #2 and #22 for elbow saturation, #1 for acceleration and the original severe shoulder issue, plus #25 (`MA_Long_Fist_6`) because it is the only elbow-led entry.  The 25-action composition means the evidence for an elbow limit is weak beyond these few cases.
 
-## 局限性与后续验证
+## Limitations and next validation
 
-1. 本次实验只测量运动学 IK 输出，没有测试力矩/电流、闭环跟踪延迟、插值和控制器频率、负载、碰撞、接触、热限制或急停行为。
-2. B2–B5 的有限差分峰值加速度仍达到 1920 rad/s²；仅添加速度限制并不能形成平滑的控制指令。在真机使用前，需要增加并验证加速度和 jerk（加加速度）限制。
-3. 基线是历史 QA 输出，而不是使用相同代码重新求解的匹配基线。应使用相同代码、相同目标重新运行真正的无约束基线，以进行具备因果可比性的前后对照。
-4. 当前时间连续性正则包含腕关节，而且候选实验同时改变了 cost 和速度参数。在将改善归因于某一关节组之前，需要进行全因子消融实验，例如比较“仅肩肘时间连续性”与“包含腕关节”，以及固定 cost 后单独改变速度限制。
-5. 需要补充更多以肘关节异常为主、并且左右对称的压力动作。24 条肩关节主导动作和 1 条肘关节主导动作不足以确定具有普适性的肘关节速度预算。
-6. 真机测试应从低于所选软件限制的速度开始，记录关节速度、力矩和电流，并设置有人监督的停止条件。只有完成这些测量并肉眼复查上述最差案例后，才应逐步提高限制。
+1. The run measures kinematic IK output only.  It does not test torque/current, closed-loop tracking latency, interpolation and controller rate, payload, collision, contacts, thermal limits, or emergency-stop behaviour.
+2. Peak finite-difference acceleration is still 1920 rad/s² in B2–B5; a velocity cap alone does not constitute smooth command shaping.  Add/validate acceleration and jerk bounds before hardware use.
+3. The baseline is historical QA output, not a matched re-solve.  Repeat a true same-code, same-target unconstrained baseline for a causal before/after comparison.
+4. Temporal regularization currently includes wrists, and the candidate test varies cost and velocity together.  Run a factorial ablation (shoulder/elbow-only temporal vs. wrist included; cost fixed while speed varies) before attributing gains to a single joint group.
+5. Add elbow-led and symmetric left/right elbow stress motions; 24 shoulder-led cases versus one elbow-led case cannot establish a general elbow budget.
+6. Start hardware work below the chosen software limit, with measured joint-speed/torque/current logs and supervised stop criteria; promote a limit only after those measurements and visual review of the listed worst cases.
 
-## 可复现性
+## Reproducibility
 
-候选名称及全部指标均保留在六个 `/tmp/dr02_tuning_full_B*.csv` 文件中。每一行都包含源 CSV、缓存目标关键点路径、完整帧窗口、FPS、参数设置、跟踪误差、肩肘接近/接触限位情况、速度/加速度、分支跳变、IK 统计量和动作保持比例。六份文件的 150 行合并结果已经永久归档到 `docs/data/dr02_temporal_velocity_full_results.csv`；如果还需要逐候选的独立原始文件，应在 `/tmp` 被清理前重新运行或另行归档。
+The candidate naming and all metrics are retained in the six `/tmp/dr02_tuning_full_B*.csv` files.  Each row includes source CSV, cached target keypoints path, full-frame window, fps, settings, errors, shoulder/elbow near/hard contact, speed/acceleration, branch jumps, IK statistics, and motion-retention ratios.  Re-run or archive those files before `/tmp` is cleared if a permanent raw artifact is required.

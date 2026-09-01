@@ -38,12 +38,12 @@ contact_pos_fixed_factor: 15.0
 # freejoint 不包含在内。旧机器人 YAML 未配置这些字段时，两项功能均默认关闭。
 temporal_continuity_regularization:
   enabled: true
-  cost: 6.5
+  cost: 10.0
   joint_name_substrings: ["shoulder", "elbow", "wrist"]
   # joint_name_substrings: ["shoulder", "elbow"]
 
 inter_frame_velocity_limit:
   enabled: true
   joint_velocity_limits:
-    shoulder: 4.0
-    elbow: 4.0
+    shoulder: 8.0
+    elbow: 10.0
