@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import mujoco
@@ -63,7 +64,40 @@ def stable_sha(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 def experiment_dir(args) -> Path:
-    return Path(args.work_dir).resolve() if args.work_dir else ROOT / "output_data/experiments/dr02_temporal_velocity_matched"
+    return Path(args.work_dir).resolve() if args.work_dir else ROOT / "output_data/experiments/dr02_temporal_velocity_matched_v2"
+
+def git_sha() -> str:
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+def cache_metadata(cfg: dict, candidate: str, row: dict, pkl: Path, qpos: Path, frames: int | None = None) -> dict:
+    """Immutable provenance attached to one generated qpos file."""
+    model = ROOT / cfg["robot_xml_path"]
+    result = {
+        "code_git_sha": git_sha(), "runner_sha256": sha(Path(__file__)),
+        "model_sha256": sha(model), "source_sha256": row["source_sha256"],
+        "shared_pkl_sha256": sha(pkl), "resolved_config_sha256": stable_sha(cfg),
+        "candidate": candidate, "motion_id": row["id"], "fps": FPS,
+        "nq": None, "frames": frames, "qpos_sha256": sha(qpos),
+        "success_timestamp_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    if qpos.exists():
+        data = np.atleast_2d(np.loadtxt(qpos, delimiter=",", dtype=float))
+        result["nq"] = int(data.shape[1]); result["frames"] = int(data.shape[0])
+    return result
+
+def metadata_path(qpos: Path) -> Path:
+    return qpos.with_suffix(qpos.suffix + ".metadata.json")
+
+def validate_cache(cfg: dict, candidate: str, row: dict, pkl: Path, qpos: Path) -> tuple[bool, str]:
+    meta_path = metadata_path(qpos)
+    if not qpos.exists() or not meta_path.exists(): return False, "missing qpos or metadata"
+    try: recorded = json.loads(meta_path.read_text())
+    except Exception as exc: return False, f"unreadable metadata: {exc!r}"
+    expected = cache_metadata(cfg, candidate, row, pkl, qpos)
+    for key in ("code_git_sha", "runner_sha256", "model_sha256", "source_sha256", "shared_pkl_sha256", "resolved_config_sha256", "candidate", "motion_id", "fps", "nq", "frames", "qpos_sha256"):
+        if recorded.get(key) != expected.get(key): return False, f"metadata mismatch: {key}"
+    return True, "validated_cache"
 
 def manifest_from_command_md() -> list[dict]:
     text = (ROOT / "command.md").read_text(encoding="utf-8")
@@ -132,11 +166,18 @@ def run(args) -> None:
         for row in rows:
             pkl = wd / row["pkl"]; out = wd / "qpos" / candidate / f"{row['id']:02d}_{Path(row['source']).stem}.csv"; out.parent.mkdir(parents=True, exist_ok=True)
             start = time.time()
-            if out.exists() and not args.force:
-                status.append({"id": row["id"], "status": "skipped", "seconds": 0, "qpos_sha256": sha(out), "config_sha256": config_hash}); continue
+            valid, reason = validate_cache(cfg, candidate, row, pkl, out)
+            if valid and not args.force:
+                status.append({"id": row["id"], "status": "validated_cache", "seconds": 0,
+                               "qpos_sha256": sha(out), "config_sha256": config_hash,
+                               "metadata": str(metadata_path(out).relative_to(wd))}); continue
             try:
                 r = make_retargeter(cfg, pkl); r.retarget(); r.save_results_as_csv(str(out))
-                status.append({"id": row["id"], "status": "success", "seconds": time.time()-start, "qpos_sha256": sha(out), "config_sha256": config_hash, "frames": r.num_frames})
+                meta = cache_metadata(cfg, candidate, row, pkl, out, r.num_frames)
+                metadata_path(out).write_text(json.dumps(meta, indent=2) + "\n")
+                status.append({"id": row["id"], "status": "success", "seconds": time.time()-start,
+                               "qpos_sha256": sha(out), "config_sha256": config_hash, "frames": r.num_frames,
+                               "cache_reason": reason, "metadata": str(metadata_path(out).relative_to(wd))})
             except Exception as exc:
                 status.append({"id": row["id"], "status": "failed", "seconds": time.time()-start, "error": repr(exc), "config_sha256": config_hash})
                 (wd / "status" / candidate).parent.mkdir(parents=True, exist_ok=True)
@@ -202,7 +243,9 @@ def evaluate_one(cfg: dict, pkl: Path, qpos_path: Path, candidate: str, motion: 
     for a,b in zip(q[:-1],q[1:]):
         d=np.empty(r.model.nv); mujoco.mj_differentiatePos(r.model,d,1/FPS,a,b); vel.append(d)
     vel=np.asarray(vel); vse=np.abs(vel[:,[r.model.jnt_dofadr[j] for j in se]])
-    per["qdot_p95_rad_s"] = float(np.percentile(vse,95,method="linear")); per["qddot_p95_rad_s2"] = float(np.percentile(np.abs(np.diff(vel[:,[r.model.jnt_dofadr[j] for j in se]],axis=0)*FPS),95,method="linear"))
+    acc = np.abs(np.diff(vel[:,[r.model.jnt_dofadr[j] for j in se]],axis=0)*FPS)
+    per["qdot_p95_rad_s"] = float(np.percentile(vse,95,method="linear")); per["qdot_max_rad_s"] = float(np.max(vse))
+    per["qddot_p95_rad_s2"] = float(np.percentile(acc,95,method="linear")); per["qddot_max_rad_s2"] = float(np.max(acc))
     if candidate == "B0": per["edge_pct"] = None
     else:
         limits=[]
@@ -221,11 +264,16 @@ def evaluate(args) -> None:
         cfg=resolved_config(candidate)
         for motion in rows:
             qpath=wd/"qpos"/candidate/f"{motion['id']:02d}_{Path(motion['source']).stem}.csv"
+            valid, reason = validate_cache(cfg, candidate, motion, wd / motion["pkl"], qpath)
+            if not valid: raise RuntimeError(f"refusing unverified cache {candidate}/{motion['id']}: {reason}")
             row, proof=evaluate_one(cfg,wd/motion["pkl"],qpath,candidate,motion); metrics.append(row); audit.append({"candidate":candidate,"motion_id":motion["id"],**proof})
     # motion-relative fidelity ratios use matched B0 only.
     b0={(x["motion_id"]):x for x in metrics if x["candidate"]=="B0"}
     for x in metrics:
-        base=b0[x["motion_id"]]; x["four_ee_arc_over_B0"] = float(np.mean([x[f"four_ee_{n}_arc_m"]/base[f"four_ee_{n}_arc_m"] for n in FOUR_EE])); x["arm_range_over_B0"] = x["arm_range_mean_rad"]/base["arm_range_mean_rad"]
+        base=b0[x["motion_id"]]
+        ratios = [x[f"four_ee_{n}_arc_m"]/base[f"four_ee_{n}_arc_m"] for n in FOUR_EE if base[f"four_ee_{n}_arc_m"] > 1e-12]
+        if not ratios or base["arm_range_mean_rad"] <= 1e-12: raise ValueError("zero B0 ratio denominator")
+        x["four_ee_arc_over_B0"] = float(np.mean(ratios)); x["arm_range_over_B0"] = x["arm_range_mean_rad"]/base["arm_range_mean_rad"]
     out=wd/"metrics.csv"; out.parent.mkdir(parents=True,exist_ok=True)
     with out.open("w",newline="") as f: w=csv.DictWriter(f,fieldnames=sorted({k for x in metrics for k in x})); w.writeheader(); w.writerows(metrics)
     (wd/"metric_sample_counts.json").write_text(json.dumps(audit,indent=2)+"\n")
