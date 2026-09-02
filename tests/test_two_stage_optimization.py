@@ -326,11 +326,10 @@ class TwoStageOptimizationTest(unittest.TestCase):
 
         self.assertEqual(
             events,
-            ["targets", "root_init", "targets", "coarse_targets", "coarse_solve", "fine_solve"],
+            ["root_init", "targets", "coarse_targets", "coarse_solve", "fine_solve"],
         )
-        self.assertEqual(len(target_snapshots), 2)
-        self.assertFalse(np.allclose(target_snapshots[0][0], target_snapshots[1][0]))
-        np.testing.assert_allclose(target_snapshots[1][0], target_snapshots[1][1])
+        self.assertEqual(len(target_snapshots), 1)
+        np.testing.assert_allclose(target_snapshots[0][0], target_snapshots[0][1])
 
 
 if __name__ == "__main__":
