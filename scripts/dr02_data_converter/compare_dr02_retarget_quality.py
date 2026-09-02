@@ -1,9 +1,20 @@
 #!/usr/bin/env python3
-"""Compare two DR02 retarget CSV files against one generated target-keypoint PKL.
+"""Offline QA comparison of two completed DR02 retarget trajectories.
 
-The report is deliberately lightweight for the 25-motion QA pass: it checks
-frame alignment/finite values, the full fine-task errors, hand/foot end-point
-errors, joint ranges, and the configured inter-frame velocity budget.
+The script reads a baseline CSV and a candidate CSV generated from the same
+target-keypoint PKL; it never reruns IK.  Its ``fine_task_error`` is the
+per-frame norm of all final fine-stage FrameTask residuals combined: the normal
+``ik_match_table`` tracking tasks plus any active contact-lock tasks.  It does
+not include the frame-0 coarse-stage task residuals, temporal PostureTask, or
+the inter-frame velocity limit (the latter is checked separately as a hard
+constraint).
+
+For each motion it also checks frame alignment and finite values, four hand/foot
+end-effector position/orientation errors, joint-limit violations, and velocity
+budget violations.  The per-motion JSON/CSV reports produced here are the data
+used to derive the 25-motion QA statistics in
+``docs/two_stage_optimization_debugging_zh.md``; that document then aggregates
+the baseline-versus-candidate results across motions.
 """
 
 from __future__ import annotations

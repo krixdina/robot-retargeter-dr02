@@ -44,8 +44,11 @@ two_stage_optimization:
   # (indices 1, 2, ...) skips the coarse stage and runs the existing fine solve
   # with this project's temporal regularization and inter-frame velocity limit.
   optimization_mode: first_frame_only
-  # Initialize the floating root from hips_mean translation and yaw (wxyz input;
-  # roll/pitch are cleared), before the first-frame coarse solve.
+  # Before solving input frame 0, initialize DR02's floating root (the free base
+  # that sets the whole robot's world position and orientation) from the target
+  # hips_mean keypoint: copy its xyz position and retain only its yaw/heading
+  # from its wxyz quaternion.  Roll and pitch are cleared so the robot starts
+  # upright; the coarse IK then solves the individual joint angles from there.
   initialize_root_from_target: true
   root_target_keypoint: hips_mean
   coarse:
