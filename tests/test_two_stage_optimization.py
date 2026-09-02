@@ -182,8 +182,8 @@ class TwoStageOptimizationTest(unittest.TestCase):
             retargeter.retarget()
 
         self.assertEqual(len(retargeter.result_pos), 2)
-        self.assertEqual(len(calls), 2)
-        coarse, fine = calls
+        self.assertEqual(len(calls), 3)
+        coarse, fine, legacy = calls
         self.assertIs(coarse[0], retargeter.coarse_tasks)
         self.assertIsNot(fine[0], retargeter.tasks)
         self.assertFalse(any(isinstance(task, mink.PostureTask) for task in fine[0]))
@@ -197,7 +197,10 @@ class TwoStageOptimizationTest(unittest.TestCase):
         np.testing.assert_allclose(fine[1], coarse[2])
         self.assertIsNone(fine[3])
         # Frame 1 follows the legacy path and anchors the temporal/FVL terms to
-        # the finalized frame 0 result.
+        # the finalized frame 0 result before using the shared stage solver.
+        self.assertIs(legacy[0], retargeter.tasks)
+        np.testing.assert_allclose(legacy[1], retargeter.result_pos[0])
+        np.testing.assert_allclose(legacy[3], retargeter.result_pos[0])
         np.testing.assert_allclose(
             retargeter.temporal_posture_task.target_q, retargeter.result_pos[0]
         )
@@ -213,6 +216,72 @@ class TwoStageOptimizationTest(unittest.TestCase):
             retargeter.frame_velocity_limit.frame_budget + 1e-8,
         )
         self.assertFalse(np.allclose(initial_q, retargeter.result_pos[0]))
+
+    def test_error_uses_default_or_explicit_task_collection(self):
+        retargeter = self.make_retargeter()
+        retargeter.update_targets(0)
+        retargeter.update_coarse_targets(0)
+
+        self.assertEqual(
+            retargeter.error(),
+            retargeter.error(retargeter.convergence_tasks),
+        )
+        expected_coarse_error = np.linalg.norm(
+            np.concatenate([
+                task.compute_error(retargeter.configuration)
+                for task in retargeter.coarse_tasks
+            ])
+        )
+        self.assertEqual(
+            retargeter.error(retargeter.coarse_tasks),
+            expected_coarse_error,
+        )
+
+    def test_shared_stage_solver_matches_the_legacy_explicit_loop(self):
+        shared = self.make_retargeter_with_two_stage(None)
+        reference = self.make_retargeter_with_two_stage(None)
+        for retargeter in (shared, reference):
+            retargeter.update_targets(0)
+            retargeter.begin_temporal_frame()
+
+        shared_solves = shared.solve_ik_stage(
+            shared.tasks,
+            shared.convergence_tasks,
+            shared.ik_limits,
+            shared.max_iter,
+            0.001,
+        )
+
+        curr_error = reference.error()
+        dt = reference.configuration.model.opt.timestep
+        velocity = mink.solve_ik(
+            reference.configuration,
+            reference.tasks,
+            dt,
+            reference.solver,
+            reference.damping,
+            limits=reference.ik_limits,
+        )
+        reference.configuration.integrate_inplace(velocity, dt)
+        next_error = reference.error()
+        additional_iterations = 0
+        while curr_error - next_error > 0.001 and additional_iterations < reference.max_iter:
+            curr_error = next_error
+            velocity = mink.solve_ik(
+                reference.configuration,
+                reference.tasks,
+                dt,
+                reference.solver,
+                reference.damping,
+                limits=reference.ik_limits,
+            )
+            reference.configuration.integrate_inplace(velocity, dt)
+            next_error = reference.error()
+            additional_iterations += 1
+
+        self.assertEqual(shared_solves, additional_iterations + 1)
+        np.testing.assert_allclose(shared.configuration.q, reference.configuration.q)
+        self.assertEqual(shared.error(), reference.error())
 
     def test_frame_zero_refreshes_fine_targets_after_root_initialization(self):
         retargeter = self.make_retargeter()

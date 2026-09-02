@@ -616,19 +616,15 @@ class RobotRetarget:
         """Return normal limits except the prior-frame velocity constraint."""
         return [limit for limit in self.ik_limits if limit is not self.frame_velocity_limit]
 
-    @staticmethod
-    def _task_error(configuration, tasks):
-        return np.linalg.norm(np.concatenate([task.compute_error(configuration) for task in tasks]))
-
     def solve_ik_stage(self, tasks, convergence_tasks, limits, max_additional_iterations, threshold):
         """Run one initial IK solve plus at most ``max_additional_iterations`` in place."""
-        curr_error = self._task_error(self.configuration, convergence_tasks)
+        curr_error = self.error(convergence_tasks)
         dt = self.configuration.model.opt.timestep
         vel = mink.solve_ik(
             self.configuration, tasks, dt, self.solver, self.damping, limits=limits
         )
         self.configuration.integrate_inplace(vel, dt)
-        next_error = self._task_error(self.configuration, convergence_tasks)
+        next_error = self.error(convergence_tasks)
         num_iter = 0
         while curr_error - next_error > threshold and num_iter < max_additional_iterations:
             curr_error = next_error
@@ -637,7 +633,7 @@ class RobotRetarget:
                 self.configuration, tasks, dt, self.solver, self.damping, limits=limits
             )
             self.configuration.integrate_inplace(vel, dt)
-            next_error = self._task_error(self.configuration, convergence_tasks)
+            next_error = self.error(convergence_tasks)
             num_iter += 1
         return num_iter + 1
 
@@ -943,8 +939,14 @@ class RobotRetarget:
                 # 记录实际生效的锁定位置，供调试窗口以接触点标记绘制。
                 self.current_contact_points.append(np.asarray(target_pos, dtype=np.float64))
     
-    def error(self):
-        return self._task_error(self.configuration, self.convergence_tasks)
+    # 用途：把指定 IK 任务相对当前机器人姿态的误差合并为一个标量，用于判断优化是否收敛。
+    def error(self, tasks=None):
+        # 默认沿用 fine 阶段的收敛任务；粗阶段可显式传入自己的任务集合。
+        tasks = self.convergence_tasks if tasks is None else tasks
+        # 先由每个任务生成当前目标与机器人实际姿态之间的误差向量，再合并为统一的整体误差。
+        return np.linalg.norm(
+            np.concatenate([task.compute_error(self.configuration) for task in tasks])
+        )
     
     def _draw_pose(self, scene, pos, quat_wxyz, point_rgba, axis_alpha=1.0,
                    point_radius=0.035, axis_radius=0.005, axis_length=0.08):
@@ -1140,27 +1142,17 @@ class RobotRetarget:
                     )
                     self.frame_ik_iteration_counts.append(coarse_solves + fine_solves)
                 else:
-                    # Keep the legacy call order and numerical behavior intact when
-                    # the optional two-stage config is absent or explicitly disabled.
+                    # Anchor temporal/FVL terms to the previous data-frame result,
+                    # then use the same stage solver as the coarse and initial fine paths.
                     self.begin_temporal_frame()
-                    curr_error = self.error()
-                    dt = self.configuration.model.opt.timestep
-                    vel = mink.solve_ik(
-                        self.configuration, self.tasks, dt, self.solver, self.damping, limits=self.ik_limits
+                    fine_solves = self.solve_ik_stage(
+                        self.tasks,
+                        self.convergence_tasks,
+                        self.ik_limits,
+                        self.max_iter,
+                        0.001,
                     )
-                    self.configuration.integrate_inplace(vel, dt)
-                    next_error = self.error()
-                    num_iter = 0
-                    while curr_error - next_error > 0.001 and num_iter < self.max_iter:
-                        curr_error = next_error
-                        dt = self.configuration.model.opt.timestep
-                        vel = mink.solve_ik(
-                            self.configuration, self.tasks, dt, self.solver, self.damping, limits=self.ik_limits
-                        )
-                        self.configuration.integrate_inplace(vel, dt)
-                        next_error = self.error()
-                        num_iter += 1
-                    self.frame_ik_iteration_counts.append(num_iter + 1)
+                    self.frame_ik_iteration_counts.append(fine_solves)
                 # 复制当前帧的完整广义位置，避免后续帧的原地积分改写已经保存的历史结果。
                 curr_pos = self.configuration.data.qpos.copy()
                 self.result_pos.append(curr_pos)
