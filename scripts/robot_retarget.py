@@ -457,6 +457,8 @@ class RobotRetarget:
 
     def setup_two_stage_optimization(self):
         """Build the optional GMR-style coarse IK stage without fine-stage extras."""
+        # ===== 参数读取与总开关校验 =====
+        # two_stage_optimization 由 YAML 配置传入；未配置或显式关闭时，保留原有的单阶段 IK 流程。
         config = self.two_stage_optimization_config
         if config is None:
             return
@@ -465,6 +467,9 @@ class RobotRetarget:
         if not _enabled_flag(config, "two_stage_optimization"):
             return
 
+        # ===== 参数读取：粗阶段任务和求解预算 =====
+        # 粗阶段单独使用一套关键点—机器人刚体映射、迭代次数及收敛阈值，
+        # 用于在精细 IK 前先得到较合理的初始姿态。
         coarse_config = config.get("coarse")
         if not isinstance(coarse_config, Mapping):
             raise ValueError("two_stage_optimization.coarse must be a mapping when enabled")
@@ -488,6 +493,8 @@ class RobotRetarget:
             strictly_positive=True,
         )
 
+        # ===== 参数读取：粗阶段的适用范围 =====
+        # 当前仅允许在第 0 帧运行粗阶段，避免改变后续帧既有的时序约束求解语义。
         if "application" in config:
             raise ValueError(
                 "two_stage_optimization.application has been renamed to optimization_mode"
@@ -499,6 +506,8 @@ class RobotRetarget:
             )
         self.two_stage_optimization_mode = optimization_mode
 
+        # ===== 参数读取：可选的浮动根节点初始化 =====
+        # 启用后会用指定人体关键点的位置和朝向初始化机器人根节点，再进入粗阶段求解。
         initialize_root = config.get("initialize_root_from_target", False)
         if not isinstance(initialize_root, (bool, np.bool_)):
             raise ValueError("two_stage_optimization.initialize_root_from_target must be a bool")
@@ -513,6 +522,9 @@ class RobotRetarget:
             )
         self.root_target_keypoint = root_target_keypoint
 
+        # ===== 根据配置构建实际的粗阶段 IK 任务 =====
+        # 每项映射把一个输入人体关键点连接到一个机器人刚体，并为位置、朝向误差设置权重。
+        # 这些 FrameTask 会在首帧真正交给 IK 求解器，而不是仅保存配置数据。
         for keypoint_name, entry in match_table.items():
             if keypoint_name not in self.keypoint_name_to_idx:
                 raise ValueError(
@@ -544,6 +556,7 @@ class RobotRetarget:
                 raise ValueError("two_stage_optimization.coarse task costs must be >= 0")
             if position_cost == 0.0 and orientation_cost == 0.0:
                 raise ValueError("two_stage_optimization.coarse tasks must have a non-zero cost")
+            # 将已校验的映射转为 Mink 任务对象；阻尼用于抑制任务冲突或不可达时的过大更新。
             task = mink.FrameTask(
                 frame_name=frame_name,
                 frame_type="body",
@@ -551,17 +564,24 @@ class RobotRetarget:
                 orientation_cost=orientation_cost,
                 lm_damping=1,
             )
+            # 字典用于按帧更新对应关键点的目标位姿，列表则保持求解器所需的任务集合。
             self.coarse_human_body_to_task[keypoint_name] = task
             self.coarse_tasks.append(task)
 
         # Do not reuse self.ik_limits: it may contain FrameVelocityLimit.  This
         # stage intentionally contains only the base ConfigurationLimit.
+        # 粗阶段只保留基础关节配置限制，不引入接触、时序姿态或帧间速度等精细阶段约束。
         self.coarse_ik_limits = [mink.ConfigurationLimit(self.model)]
+        # 仅在任务和约束均成功建立后启用，供后续逐帧流程判断是否执行该阶段。
         self.two_stage_enabled = True
 
+    # 用途：将指定动作帧的各人体关键点位姿作为粗 IK 对应各任务的目标位姿。
+    # 输入：frame_idx，表示当前在输入关键点序列中处理的帧编号。
     def update_coarse_targets(self, frame_idx):
         """Set coarse FrameTask targets; no contact-lock target participates here."""
+        # 逐个取出“人体关键点名称—粗 IK 任务”的对应关系，使每个机器人刚体跟随同名输入关键点。
         for keypoint_name, task in self.coarse_human_body_to_task.items():
+            # 从已加载的动作序列提取当前帧的位置与四元数朝向，并组合为 Mink 所需的刚体位姿目标。
             target_pos, target_quat = self._get_target_pose(frame_idx, keypoint_name)
             task.set_target(mink.SE3.from_rotation_and_translation(mink.SO3(target_quat), target_pos))
 
@@ -606,6 +626,7 @@ class RobotRetarget:
         initialized_q[root_qpos_adr + 3:root_qpos_adr + 7] = (
             np.cos(yaw / 2.0), 0.0, 0.0, np.sin(yaw / 2.0)
         )
+        # 将 initialized_q 输入 FK 更新机器人的所有关节位置和朝向
         self.configuration.update(initialized_q)
 
     def _fine_tasks_for_initialization_frame(self):
@@ -897,7 +918,8 @@ class RobotRetarget:
                         f"[{lower:.4f}, {upper:.4f}] -> [{new_lower:.4f}, {new_upper:.4f}] rad"
                     )
  
-    # 用途：使用当前动作帧普通身体关键点和接触锁定约束来更新 IK 求解的目标位姿，使随后的逆运动学求解对应这一帧输入运动。
+    # 用途：更新 IK 目标位姿
+    #      使用当前动作帧普通身体关键点和接触锁定约束来更新 IK 求解的目标位姿，使随后的逆运动学求解对应这一帧输入运动。
     # 输入：self 表示已加载关键点序列并建立 IK 任务的重定向器实例；frame_idx 表示要读取的关键点序列帧编号。
     # 输出：不直接返回数值；会改写各 IK 任务的目标位姿，并刷新 self.current_targets（用于调试绘制的普通目标记录）和 self.current_contact_points（当前激活接触位置的记录）。
     def update_targets(self, frame_idx):
@@ -1112,11 +1134,13 @@ class RobotRetarget:
             # 逐帧将输入关键点及接触锁定位置设为当前 IK 目标；同一配置对象会保留上一帧解，作为下一帧的初始姿态。
             for frame_idx in tqdm(range(self.num_frames), desc="Retargeting", unit="frame"):
                 start_time = time.time()
-                self.update_targets(frame_idx)
                 if self._should_run_coarse_stage(frame_idx):
                     # This compatibility mode intentionally uses GMR-style coarse
                     # IK only for the initial pose.  Later frames retain the
                     # established temporal/FVL single-stage trajectory semantics.
+                    # 它是把第 0 帧目标关键点的 xyz 和 yaw，作为当前机器人 root 的初始姿态。
+                    # roll 和 pitch 会被刻意丢弃，使机器人浮动基座保持竖直。
+                    # 随后粗阶段 IK 和精细阶段 IK 都从这个初始化后的 root 姿态继续优化。
                     self._initialize_root_from_target(frame_idx)
                     # Non-active contact tasks target the current robot-body pose.
                     # Root initialization changes that FK pose, so refresh all
@@ -1144,15 +1168,16 @@ class RobotRetarget:
                 else:
                     # Anchor temporal/FVL terms to the previous data-frame result,
                     # then use the same stage solver as the coarse and initial fine paths.
+                    self.update_targets(frame_idx)
                     self.begin_temporal_frame()
-                    fine_solves = self.solve_ik_stage(
+                    one_stage_solves = self.solve_ik_stage(
                         self.tasks,
                         self.convergence_tasks,
                         self.ik_limits,
                         self.max_iter,
                         0.001,
                     )
-                    self.frame_ik_iteration_counts.append(fine_solves)
+                    self.frame_ik_iteration_counts.append(one_stage_solves)
                 # 复制当前帧的完整广义位置，避免后续帧的原地积分改写已经保存的历史结果。
                 curr_pos = self.configuration.data.qpos.copy()
                 self.result_pos.append(curr_pos)

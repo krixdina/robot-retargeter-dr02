@@ -12,6 +12,8 @@
 和 fine 求解前必须再次调用 `update_targets(0)`，刷新普通任务和接触任务目标。这个
 接触目标刷新（contact refresh）是最终 25 动作结果所使用的实现。
 
+因为我们为了让 IK 更好求解，会将机器人的 xyz yaw 手动移动到第 0 帧的位置，但是update_frame
+
 不需要 adaptive fallback；本轮证据也不支持把问题归因为“继续细调粗阶段权重”。
 
 ## 根因演进
