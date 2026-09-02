@@ -42,8 +42,8 @@ no configured speed budget.
 | B5 | 12 | 8 | 8 | 25/25 |
 
 The frozen source/PKL hashes are in
-`docs/data/dr02_temporal_velocity_matched_manifest.json`; the 150-row result
-table is `docs/data/dr02_temporal_velocity_matched_results.csv`.  The former
+`docs/data/dr02_temporal_velocity_matched_v2_manifest.json`; the 150-row result
+table is `docs/data/dr02_temporal_velocity_matched_v2_results.csv`.  The former
 historical result table is preserved, clearly separated, in
 `docs/data/historical/dr02_temporal_velocity_historical_results.csv`.
 
@@ -113,13 +113,33 @@ elbow cap on a safety-first software test.
 
 ## Verification and limitations
 
-An independent FK audit recomputed all four-end-effector and upper-limb
-metrics directly from every saved qpos CSV and frozen PKL, without calling the
-report evaluator.  It checked 150 candidate-motion rows, all passed, with a
-maximum absolute reported-vs-audited difference of 0.0 (tolerance `1e-9`).
-The row-level audit and summary are in
-`docs/data/dr02_temporal_velocity_matched_independent_audit.csv` and
-`docs/data/dr02_temporal_velocity_matched_independent_audit_summary.json`.
+An independent FK audit recomputed all four-end-effector and upper-limb,
+limit, velocity, acceleration, edge, arc and range values directly from every
+saved qpos CSV and frozen PKL.  It has its own literal pairs, pickle/CSV
+reader, MuJoCo FK and rotation-matrix angle calculation; it does not call the
+production evaluator or `RobotRetarget`. All 150 candidate-motion rows pass;
+the maximum reported-vs-audited difference is `3.2836e-4` degrees, the normal
+near-zero `acos` roundoff between matrix and quaternion implementations
+(tolerance `5e-4`). The row-level audit and summary are in
+`docs/data/dr02_temporal_velocity_matched_v2_independent_audit.csv` and
+`docs/data/dr02_temporal_velocity_matched_v2_independent_audit_summary.json`.
+
+## Reproducibility details
+
+The compact archive includes all 150 metrics, sample counts (`T*4` for 4EE and
+`T*6` for UL), 25-motion manifest, six resolved YAML files, trajectory/status
+hashes and the generation SHA (`43c4527`) separately from the current report
+SHA. This distinction is deliberate: evaluation/audit validate a historical
+generation snapshot rather than relabel it as newly generated. See
+`docs/data/dr02_temporal_velocity_matched_v2_provenance.json`.
+
+`dr02_temporal_velocity_matched_v2_action_equal.csv` contains the primary
+motion-equal aggregates. `..._frame_weighted.csv` weights each per-motion
+metric by its number of frames; it is explicitly a weighted mean of per-motion
+P95 values, not a pooled P95. `..._worst_cases.csv` identifies, separately,
+the worst 4EE/UL tracking, shoulder/elbow hard frame/run, and qddot P95/max
+motions for each candidate. The table above additionally omits no `near`
+data: both joint/frame/run near and hard columns are retained in the archive.
 
 These are kinematic IK results only.  They do not validate collision,
 torque/current, controller tracking, acceleration/jerk shaping, thermal

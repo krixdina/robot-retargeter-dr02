@@ -29,7 +29,7 @@ inter_frame_velocity_limit: {enabled: false}
 | B4 | 10 | 8 | 10 | 25/25 |
 | B5 | 12 | 8 | 8 | 25/25 |
 
-冻结源文件/PKL 哈希在 `docs/data/dr02_temporal_velocity_matched_manifest.json`；150 行结果在 `docs/data/dr02_temporal_velocity_matched_results.csv`。以前的历史结果已明确分离并保留在 `docs/data/historical/dr02_temporal_velocity_historical_results.csv`。
+冻结源文件/PKL 哈希在 `docs/data/dr02_temporal_velocity_matched_v2_manifest.json`；150 行结果在 `docs/data/dr02_temporal_velocity_matched_v2_results.csv`。以前的历史结果已明确分离并保留在 `docs/data/historical/dr02_temporal_velocity_historical_results.csv`。
 
 ## 已校正的跟踪指标
 
@@ -67,6 +67,12 @@ inter_frame_velocity_limit: {enabled: false}
 
 ## 校验与局限
 
-独立 FK 审计从每个保存的 qpos CSV 和冻结 PKL 直接重新计算四末端与上肢指标，且没有调用报告评价器。它检查了 150 个候选-动作行，全部通过；报告值与审计值最大绝对差为 0.0（容差 `1e-9`）。逐行审计和摘要见 `docs/data/dr02_temporal_velocity_matched_independent_audit.csv` 与 `docs/data/dr02_temporal_velocity_matched_independent_audit_summary.json`。
+独立 FK 审计从每个保存的 qpos CSV 和冻结 PKL 直接重新计算四末端、上肢、限位、速度、加速度、edge、弧长和活动范围；它有自己写死的 pair、pickle/CSV 读取、MuJoCo FK 和旋转矩阵夹角计算，不调用生产评价器或 `RobotRetarget`。150 个候选-动作行全部通过；最大差为 `3.2836e-4` 度，这是矩阵与四元数实现接近零角度时 `acos` 的正常舍入差（容差 `5e-4`）。逐行审计和摘要见 `docs/data/dr02_temporal_velocity_matched_v2_independent_audit.csv` 与 `docs/data/dr02_temporal_velocity_matched_v2_independent_audit_summary.json`。
+
+## 可复现性细节
+
+精简归档包括 150 行指标、样本计数（4EE 为 `T*4`，UL 为 `T*6`）、25 动作 manifest、6 个 resolved YAML、轨迹/status 哈希，并将生成 SHA `43c4527` 与当前报告 SHA 分开记录。这样 evaluate/audit 验证的是历史生成快照，而不会把旧轨迹错误贴成当前代码生成；见 `docs/data/dr02_temporal_velocity_matched_v2_provenance.json`。
+
+`dr02_temporal_velocity_matched_v2_action_equal.csv` 是主要的动作等权汇总。`..._frame_weighted.csv` 用帧数加权每个动作的指标；它明确是“逐动作 P95 的加权均值”，不是 pooled P95。`..._worst_cases.csv` 分别列出各候选最差 4EE/UL 跟踪、肩/肘 hard 帧与连续段、qddot P95/max 的动作。归档还保留 near/hard 的 joint/frame/run 三种口径，不会静默丢弃 near。
 
 这些只是运动学 IK 结果，未验证碰撞、力矩/电流、控制器跟踪、加速度/jerk 整形、热限制、负载或硬件安全。长 hard 限位连续段和残余加速度峰值意味着部署前仍需要进一步可行性工作。

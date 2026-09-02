@@ -28,6 +28,25 @@ class MatchedExperimentDefinitionTest(unittest.TestCase):
         self.assertFalse(any("hip" in source or "thigh" in source or "calf" in source for source in sources))
         self.assertEqual(len(sources), len(set(sources)))
 
+    def test_pairs_have_exact_expected_membership(self):
+        self.assertEqual(matched.FOUR_EE["left_foot"], ("left_foot_end_link", "left_foot_end_link"))
+        self.assertEqual(matched.FOUR_EE["right_foot"], ("right_foot_end_link", "right_foot_end_link"))
+        self.assertEqual(matched.UPPER_LIMB["left_hand"], ("left_fore_arm", "left_hand_link"))
+
+    def test_hard_is_a_subset_of_near_at_boundaries(self):
+        import numpy as np
+        hard = np.array([0.001, 0.0009]) <= 0.001
+        near = np.array([0.001, 0.0009]) <= np.deg2rad(5)
+        self.assertTrue(np.all(~hard | near))
+        self.assertEqual(matched.longest_run(np.array([False, True, True, False, True])), 2)
+
+    def test_archive_aggregation_is_frame_weighted_not_pooled_p95(self):
+        rows = [{"candidate":"B0","motion_id":"1","source":"a","frames":"1","x":"1","edge_pct":""},
+                {"candidate":"B0","motion_id":"2","source":"b","frames":"3","x":"5","edge_pct":""}]
+        action, frame, _ = matched.aggregate_rows(rows)
+        self.assertEqual(action[0]["x"], 3.0)
+        self.assertEqual(frame[0]["x"], 4.0)
+
 
 if __name__ == "__main__":
     unittest.main()
