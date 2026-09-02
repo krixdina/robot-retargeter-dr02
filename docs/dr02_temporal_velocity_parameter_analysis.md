@@ -71,22 +71,28 @@ quaternion angular distance (degrees).  The four-end-effector group checks
 hand/foot placement; the upper-limb group makes a strange shoulder/elbow IK
 branch visible even if a hand happens to reach its target.
 
+GMR's stage 1 optimizes all mapped orientations plus four-end-effector
+positions; stage 2 optimizes all mapped positions and orientations. Thus four
+end effectors are an optimization focus, not a complete evaluation. This
+report's 4EE is terminal fidelity and UL is a shoulder/elbow specialist score;
+it does not claim a whole-body global or root-relative evaluation.
+
 ## Limit, motion and aggregation metrics
 
-`near` means at least one relevant joint is within 5° of either effective
-joint limit; `hard` means within 0.001 rad (about 0.057°).  A `near/hard frame
-%` is the fraction of frames for which at least one shoulder or elbow joint,
-respectively, meets that condition.  `hard run` is the longest contiguous
-hard-frame interval, in frames.  Both near and hard are retained below so the
-5° warning region is not silently discarded.
+`near` means within 5° of either effective joint limit; `hard` means within
+0.001 rad (about 0.057°), so hard ⊆ near. `joint %` is the fraction of all
+relevant joint×frame cells meeting the condition; `frame %` is the fraction
+of frames in which at least one joint in that group meets it; `longest run` is
+the largest number of consecutive frames satisfying that corresponding frame
+condition. Hard is numerical limit saturation, not collision/contact or a
+velocity hard constraint.
 
 `qdot P95` and `qddot P95` are P95 absolute shoulder/elbow finite-difference
 velocity (rad/s) and acceleration (rad/s²).  `edge %` is the fraction of
 shoulder/elbow velocity samples at least 99% of their configured cap.  `arc /
 B0` is four-end-effector FK trajectory length relative to B0; `range / B0` is
 the mean shoulder/elbow/wrist joint range relative to B0.  Ratios are best
-near 1, not unboundedly high.  ↓ means lower is normally preferable; ↑ means
-closer to 1 is preferable.  `qdot` has no arrow because both freezing and
+near 1, not unboundedly high.  ↓ means lower is normally preferable. `qdot` has no arrow because both freezing and
 spikes are undesirable.
 
 Action-equal is the primary aggregation: compute a metric separately for each
@@ -95,23 +101,52 @@ and the 14,146-frame running clip each have one vote.
 
 ## Action-equal results (primary)
 
-| candidate | 4EE pos P95 cm ↓ | 4EE rot P95° ↓ | UL pos P95 cm ↓ | UL rot P95° ↓ | shoulder near/hard % ↓ | shoulder hard run ↓ | elbow near/hard % ↓ | elbow hard run ↓ | qdot P95 | edge % ↓ | qddot P95 ↓ | arc/B0 ↑ | range/B0 ↑ |
+| candidate | 4EE pos P95 cm ↓ | 4EE rot P95° ↓ | UL pos P95 cm ↓ | UL rot P95° ↓ | shoulder near/hard % ↓ | shoulder hard run ↓ | elbow near/hard % ↓ | elbow hard run ↓ | qdot P95 | edge % ↓ | qddot P95 ↓ | arc/B0 target≈1 | range/B0 target≈1 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | B0 | 6.74 | 24.62 | 7.90 | 54.32 | 31.78 / 30.80 | 623 | 25.37 / 20.12 | 275 | 7.59 | N/A | 304.9 | 1.000 | 1.000 |
 | B1 | 11.98 | 38.49 | 14.32 | 70.33 | **17.53 / 15.99** | **276** | 13.62 / 10.13 | 158 | 4.00 | 19.80 | 69.9 | 0.981 | **0.877** |
 | **B2** | **9.71** | 38.58 | **11.38** | 68.87 | 20.92 / 19.08 | 309 | 15.71 / 10.86 | 166 | 5.73 | 2.49 | 67.5 | **0.990** | 0.797 |
 | B3 | 9.90 | 38.69 | 11.54 | 69.28 | 20.88 / 19.02 | 308 | 15.24 / 10.52 | 165 | **5.45** | 3.39 | 66.4 | 0.989 | **0.800** |
 | B4 | **9.64** | **38.56** | **11.32** | **68.50** | 20.79 / 18.94 | 309 | 15.88 / 10.98 | 166 | 5.70 | 2.14 | 68.1 | **0.990** | 0.795 |
-| B5 | 10.43 | 40.42 | 12.26 | 70.92 | 19.43 / 17.58 | 301 | 14.21 / **9.53** | **157** | 5.00 | **1.44** | **56.8** | 0.986 | 0.762 |
+| B5 | 10.43 | 40.42 | 12.26 | 70.91 | 19.43 / 17.58 | 301 | 14.21 / **9.53** | **157** | 5.00 | **1.44** | **56.8** | 0.986 | 0.762 |
 
 The tracking cost of temporal/velocity constraints is now clear in a matched
 comparison: B0 has the lowest tracking error but poor limit/acceleration
-behavior.  B1 suppresses motion most strongly; B5 most strongly regularizes
-the 8 rad/s family.  B2 is the practical compromise for an 8 rad/s elbow
+behavior. B1 has the greatest arc compression and B5 the greatest range
+compression. B2 is the practical compromise for an 8 rad/s elbow
 budget.  B4's small tracking improvement is not enough to justify its higher
 elbow cap on a safety-first software test.
 
 ## Verification and limitations
+
+`near` is within 5° of an effective joint limit and `hard` is within 0.001
+rad; hence hard ⊆ near. The archive preserves joint %, frame %, and longest
+run for both. Hard is numerical limit saturation, not collision/contact or a
+velocity hard constraint. For arc/B0, compute each end effector's
+candidate/B0 arc ratio, average the four, then aggregate motions; both arc and
+range target approximately 1. B1 has the greatest arc compression and B5 the
+greatest range compression. Bold face marks the recommended B2 row and best
+single-metric alternatives, not an overall ranking.
+
+## Frame-weighted and worst-case views
+
+Frame-weighted values weight each per-motion statistic by its frame count; they
+are not pooled P95s.
+
+| candidate | 4EE pos | UL pos | shoulder hard frame % | elbow hard frame % | qddot P95 | arc/B0 | range/B0 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| B0 | 6.56 | 7.68 | 22.76 | 16.06 | 338.1 | 1.000 | 1.000 |
+| B1 | 12.30 | 14.71 | 11.63 | 8.51 | 79.1 | 0.973 | 0.908 |
+| B2 | 9.92 | 11.69 | 14.46 | 8.72 | 74.1 | 0.984 | 0.814 |
+| B3 | 10.14 | 11.87 | 14.42 | 8.39 | 73.1 | 0.983 | 0.819 |
+| B4 | 9.85 | 11.63 | 14.30 | 8.86 | 74.7 | 0.984 | 0.813 |
+| B5 | 10.77 | 12.70 | 13.47 | 7.53 | 62.3 | 0.978 | 0.781 |
+
+Worst-case B2 values are 14.54 cm 4EE (motion 17), 16.91 cm UL (1), 54.45%
+shoulder hard frame (5), 790 shoulder-hard frames (5), 34.81% elbow hard
+frame (2), 481 elbow-hard frames (22), qddot max 1920 (1), and qddot P95
+116.76 (17). Other candidates' corresponding values are retained in the
+program-generated worst-case table.
 
 An independent FK audit recomputed all four-end-effector and upper-limb,
 limit, velocity, acceleration, edge, arc and range values directly from every
@@ -138,8 +173,8 @@ motion-equal aggregates. `..._frame_weighted.csv` weights each per-motion
 metric by its number of frames; it is explicitly a weighted mean of per-motion
 P95 values, not a pooled P95. `..._worst_cases.csv` identifies, separately,
 the worst 4EE/UL tracking, shoulder/elbow hard frame/run, and qddot P95/max
-motions for each candidate. The table above additionally omits no `near`
-data: both joint/frame/run near and hard columns are retained in the archive.
+motions for each candidate. The archive omits no `near` data: both
+joint/frame/run near and hard columns are retained.
 
 These are kinematic IK results only.  They do not validate collision,
 torque/current, controller tracking, acceleration/jerk shaping, thermal
