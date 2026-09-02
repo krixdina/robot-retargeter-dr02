@@ -39,9 +39,11 @@ ik_match_table: {
 # feet; the single GMR JSON instead sets hand position costs to zero.
 two_stage_optimization:
   enabled: true
-  # GMR-style coarse-to-fine is an initialization only.  Frame 1+ keeps this
-  # project's temporal regularization and full-frame velocity-limit semantics.
-  application: first_frame_only
+  # Run the coarse-then-fine GMR-style solve only for frame index 0 (the first
+  # input frame), to establish the initial robot pose.  Every later input frame
+  # (indices 1, 2, ...) skips the coarse stage and runs the existing fine solve
+  # with this project's temporal regularization and inter-frame velocity limit.
+  optimization_mode: first_frame_only
   # Initialize the floating root from hips_mean translation and yaw (wxyz input;
   # roll/pitch are cleared), before the first-frame coarse solve.
   initialize_root_from_target: true

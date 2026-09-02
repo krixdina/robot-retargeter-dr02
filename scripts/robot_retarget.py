@@ -283,7 +283,7 @@ class RobotRetarget:
         self.coarse_ik_limits = []
         self.coarse_max_additional_iterations = 0
         self.coarse_convergence_threshold = 0.001
-        self.two_stage_application = "first_frame_only"
+        self.two_stage_optimization_mode = "first_frame_only"
         self.initialize_root_from_target = False
         self.root_target_keypoint = "hips_mean"
         self.convergence_tasks = []
@@ -488,12 +488,16 @@ class RobotRetarget:
             strictly_positive=True,
         )
 
-        application = config.get("application", "first_frame_only")
-        if application != "first_frame_only":
+        if "application" in config:
             raise ValueError(
-                "two_stage_optimization.application must be 'first_frame_only'"
+                "two_stage_optimization.application has been renamed to optimization_mode"
             )
-        self.two_stage_application = application
+        optimization_mode = config.get("optimization_mode", "first_frame_only")
+        if optimization_mode != "first_frame_only":
+            raise ValueError(
+                "two_stage_optimization.optimization_mode must be 'first_frame_only'"
+            )
+        self.two_stage_optimization_mode = optimization_mode
 
         initialize_root = config.get("initialize_root_from_target", False)
         if not isinstance(initialize_root, (bool, np.bool_)):
@@ -563,7 +567,11 @@ class RobotRetarget:
 
     def _should_run_coarse_stage(self, frame_idx):
         """Return whether the optional GMR-style initialization belongs to this frame."""
-        return self.two_stage_enabled and self.two_stage_application == "first_frame_only" and frame_idx == 0
+        return (
+            self.two_stage_enabled
+            and self.two_stage_optimization_mode == "first_frame_only"
+            and frame_idx == 0
+        )
 
     def _initialize_root_from_target(self, frame_idx):
         """Initialize a free root from target translation and yaw before the first coarse solve.

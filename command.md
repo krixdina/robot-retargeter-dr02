@@ -30,7 +30,7 @@ PYTHON_BIN=/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
 - `--overwrite`：允许替换该独立 two-stage 测试目录内同名的输出。
 - `PYTHON_BIN`：可选环境变量，用于指定 Python 解释器。
 
-二阶段开关与粗阶段收敛参数位于 `two_stage_optimization`：`enabled` 控制是否运行首帧初始化，`application: first_frame_only` 表示只有第 0 帧会先运行粗阶段；`initialize_root_from_target: true` 会在粗优化前把 floating root 的 xyz 与 `root_target_keypoint`（默认 `hips_mean`）的 yaw 对齐，并清除 roll/pitch。`coarse.max_additional_iterations` 是首次求解之后最多允许的额外求解次数（允许 `0`，`10` 忠实对应 GMR 的循环语义），`coarse.convergence_threshold` 控制停止条件。第 0 帧粗阶段只使用 YAML 明列的 `coarse.ik_match_table` FrameTask 和基础关节限位，随后在同一构型上进行细优化；其细优化保留普通 FrameTask/接触任务，但不使用 PostureTask 或 FrameVelocityLimit。第 1 帧及以后完全使用项目原有 `ik_match_table`、接触锁定、时间连续性正则及帧间速度硬约束。
+二阶段开关与粗阶段收敛参数位于 `two_stage_optimization`：`enabled` 控制是否运行首帧初始化，`optimization_mode: first_frame_only` 表示只有第 0 帧会先运行粗阶段；`initialize_root_from_target: true` 会在粗优化前把 floating root 的 xyz 与 `root_target_keypoint`（默认 `hips_mean`）的 yaw 对齐，并清除 roll/pitch。`coarse.max_additional_iterations` 是首次求解之后最多允许的额外求解次数（允许 `0`，`10` 忠实对应 GMR 的循环语义），`coarse.convergence_threshold` 控制停止条件。第 0 帧粗阶段只使用 YAML 明列的 `coarse.ik_match_table` FrameTask 和基础关节限位，随后在同一构型上进行细优化；其细优化保留普通 FrameTask/接触任务，但不使用 PostureTask 或 FrameVelocityLimit。第 1 帧及以后完全使用项目原有 `ik_match_table`、接触锁定、时间连续性正则及帧间速度硬约束。
 
 25 动作批量 QA 可用 `scripts/dr02_data_converter/compare_dr02_retarget_quality.py` 比较同一目标 PKL 下的基线与候选 CSV，输出有限值、完整 fine-task、四末端位置/方向误差、关节限位和速度预算指标。例如：
 

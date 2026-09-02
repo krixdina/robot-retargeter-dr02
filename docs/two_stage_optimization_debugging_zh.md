@@ -67,7 +67,7 @@ Eagle Claw（前 600 帧，早期固定 `temporal=6.5`、肩/肘 4 rad/s）的�
 
 ## 当前语义与适用边界
 
-- `two_stage_optimization.application` 仅接受 `first_frame_only`：第 0 帧为
+- `two_stage_optimization.optimization_mode` 仅接受 `first_frame_only`：第 0 帧为
   root-first → 刷新 normal/contact targets → coarse FrameTask +
   `ConfigurationLimit` → fine normal/contact tasks；粗阶段不添加 `PostureTask`、
   `FrameVelocityLimit` 或接触锁定任务。

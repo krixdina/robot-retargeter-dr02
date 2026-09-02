@@ -37,7 +37,7 @@ def make_owner(config):
     owner.coarse_ik_limits = []
     owner.coarse_max_additional_iterations = 0
     owner.coarse_convergence_threshold = 0.001
-    owner.two_stage_application = "first_frame_only"
+    owner.two_stage_optimization_mode = "first_frame_only"
     owner.initialize_root_from_target = False
     owner.root_target_keypoint = "hips_mean"
     owner.two_stage_enabled = False
@@ -102,14 +102,19 @@ class TwoStageOptimizationTest(unittest.TestCase):
                     "ik_match_table": {"elbow": ["link", 0, 1]}}}
             )
         owner = make_owner(
-            {"enabled": True, "application": "first_frame_only", "coarse": {
+            {"enabled": True, "optimization_mode": "first_frame_only", "coarse": {
                 "max_additional_iterations": 0, "convergence_threshold": 0.001,
                 "ik_match_table": {"elbow": ["link", 0, 1]},
             }}
         )
         self.assertEqual(owner.coarse_max_additional_iterations, 0)
-        with self.assertRaisesRegex(ValueError, "application"):
-            make_owner({"enabled": True, "application": "every_frame", "coarse": {
+        with self.assertRaisesRegex(ValueError, "optimization_mode"):
+            make_owner({"enabled": True, "optimization_mode": "every_frame", "coarse": {
+                "max_additional_iterations": 0, "convergence_threshold": 0.001,
+                "ik_match_table": {"elbow": ["link", 0, 1]},
+            }})
+        with self.assertRaisesRegex(ValueError, "renamed to optimization_mode"):
+            make_owner({"enabled": True, "application": "first_frame_only", "coarse": {
                 "max_additional_iterations": 0, "convergence_threshold": 0.001,
                 "ik_match_table": {"elbow": ["link", 0, 1]},
             }})
