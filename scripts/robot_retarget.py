@@ -236,7 +236,7 @@ class RobotRetarget:
     def __init__(
         self,
         model_path: str,
-        keypoint_path: str,
+        keypoint_path: str | None,
         ik_match_table: dict,
         solver: str = "daqp",
         verbose: bool = False,
@@ -248,9 +248,11 @@ class RobotRetarget:
         temporal_continuity_regularization: dict | None = None,
         inter_frame_velocity_limit: dict | None = None,
         two_stage_optimization: dict | None = None,
+        keypoints_data: dict | None = None,
     ):
         self.xml_file = model_path
         self.keypoint_path = keypoint_path
+        self._keypoints_data = keypoints_data
         self.ik_match_table = ik_match_table
         self.model = self._load_model_with_ground(self.xml_file)
         self.data = mujoco.MjData(self.model)
@@ -398,8 +400,13 @@ class RobotRetarget:
     # 输出：不直接返回数值；会更新 self.keypoints_pos（逐帧关键点位置）、self.keypoints_quat（逐帧关键点朝向）、接触状态、名称索引及帧数和时间间隔等对象状态。
     def load_keypoints(self):
         # 以二进制反序列化方式恢复 pkl 中保存的字典，其中包含位置、朝向、关键点名称和接触信息。
-        with open(self.keypoint_path, "rb") as f:
+        if self._keypoints_data is None:
+            if self.keypoint_path is None:
+                raise ValueError("keypoint_path or keypoints_data is required")
+            with open(self.keypoint_path, "rb") as f:
                 keypoints_data = pickle.load(f)
+        else:
+            keypoints_data = self._keypoints_data
         # 建立“关键点名称到数组列号”的索引，使后续能按配置名称快速提取某一关键点的逐帧位姿。
         self.keypoint_names = keypoints_data["keypoint_names"]
         self.keypoint_name_to_idx = {

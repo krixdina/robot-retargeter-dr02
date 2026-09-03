@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Export headerless DR02 qpos CSV data to the RL motion NPZ format.
+"""Export DR02 qpos data to the RL motion NPZ format.
 
 The CSV must contain exactly 38 numeric columns in every row, in MJCF qpos
 order: root position (xyz), root quaternion (xyzw), then the 31 DR02 joints.
-No resampling, quaternion conversion, or joint reordering is performed.
+The exported schema uses WXYZ, matching the reference MotionDecode NPZ.
 """
 
 from __future__ import annotations
@@ -12,6 +12,8 @@ import argparse
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import sys
+import os
+import tempfile
 
 import numpy as np
 
@@ -86,14 +88,44 @@ def export_npz(input_path: Path, output_path: Path, fps: int, overwrite: bool) -
         raise ValueError(f"output already exists: {output_path} (pass --overwrite to replace it)")
 
     data = load_qpos_csv(input_path)
+    export_qpos_array(data, output_path, fps, overwrite=overwrite)
+
+
+def export_qpos_array(data: np.ndarray, output_path: Path, fps: int, *, overwrite: bool) -> None:
+    """Atomically export an in-memory XYZW qpos trajectory as a WXYZ NPZ."""
+    if output_path.exists() and not overwrite:
+        raise ValueError(f"output already exists: {output_path} (pass --overwrite to replace it)")
+    if data.ndim != 2 or data.shape[1] != NUM_COLUMNS:
+        raise ValueError(f"qpos must have shape [frames, {NUM_COLUMNS}], got {data.shape}")
+    if data.shape[0] == 0 or not np.isfinite(data).all():
+        raise ValueError("qpos must contain at least one finite frame")
+    quaternion_norms = np.linalg.norm(data[:, ROOT_ROT_COLUMNS], axis=1)
+    invalid_quaternions = np.abs(quaternion_norms - 1.0) > QUATERNION_NORM_TOLERANCE
+    if np.any(invalid_quaternions):
+        frame = int(np.flatnonzero(invalid_quaternions)[0])
+        raise ValueError(
+            f"root quaternion at frame {frame} has norm {quaternion_norms[frame]:.8g}; "
+            f"expected 1 within {QUATERNION_NORM_TOLERANCE:g}"
+        )
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        output_path,
-        root_pos=data[:, ROOT_POS_COLUMNS].astype(np.float32),
-        root_rot=data[:, ROOT_ROT_COLUMNS].astype(np.float32),
-        dof_pos=data[:, DOF_POS_COLUMNS].astype(np.float32),
-        fps=np.array(fps, dtype=np.int64),
-    )
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=output_path.parent, prefix=f".{output_path.name}.", suffix=".tmp.npz", delete=False
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+        np.savez_compressed(
+            temporary_path,
+            root_pos=data[:, ROOT_POS_COLUMNS].astype(np.float32),
+            root_rot=data[:, [6, 3, 4, 5]].astype(np.float32),
+            dof_pos=data[:, DOF_POS_COLUMNS].astype(np.float32),
+            fps=np.array(fps, dtype=np.int64),
+        )
+        os.replace(temporary_path, output_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def build_parser() -> argparse.ArgumentParser:

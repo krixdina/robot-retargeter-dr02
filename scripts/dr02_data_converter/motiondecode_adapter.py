@@ -18,6 +18,8 @@ import tempfile
 from pathlib import Path
 from typing import Sequence
 
+import numpy as np
+
 
 EXPECTED_HEADER = (
     "root_pos_x(m)",
@@ -157,6 +159,21 @@ def convert_motiondecode_csv(input_path: Path, output_path: Path, *, overwrite: 
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+
+
+def load_motiondecode_qpos(input_path: Path) -> np.ndarray:
+    """Load MotionDecode CSV into the headerless XYZW qpos convention in memory."""
+    rows: list[list[float]] = []
+    with input_path.open("r", encoding="utf-8-sig", newline="") as source:
+        reader = csv.reader(source)
+        _validate_header(next(reader, None))
+        for csv_line, row in enumerate(reader, start=2):
+            _validate_row(row, csv_line)
+            values = [float(value) for value in row]
+            rows.append([*values[:3], values[4], values[5], values[6], values[3], *values[7:]])
+    if not rows:
+        raise MotionDecodeValidationError("input CSV contains no motion frames")
+    return np.asarray(rows, dtype=np.float64)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
