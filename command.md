@@ -1,418 +1,182 @@
-### 单文件测试模式
+# MotionDecode 批量转换说明
 
-普通单文件脚本会依次导出规范化 CSV、DR02 关键点 PKL、DR02 动作 CSV 和 NPZ；
-完成后默认启动 MuJoCo 对照查看器，同时显示原始 MotionDecode G1（+Y）和本次生成的
-DR02（-Y）。
+本目录的 `command.sh` 是 MotionDecode G1 CSV 到 DR02 强化学习 NPZ 的全量批量入口。它调用 `scripts/dr02_data_converter/run_dr02_batch.sh`，每个输入文件由独立进程直接转换并只发布最终 NPZ；不会生成规范化 CSV、关键点 PKL 或机器人动作 CSV 等中间数据。
+
+最终 NPZ 中根部四元数采用 `wxyz` 顺序。
+
+## 运行前提
+
+- 在仓库根目录执行命令：`/home/krixdina/robot_retargeter`。
+- MotionDecode 数据集目录必须存在，且待转换 CSV 位于该目录内。
+- Python 环境必须安装本项目转换依赖（含 MuJoCo、Mink 等）。`command.sh` 会优先选择仓库的 `.conda/bin/python`，其次选择 `/home/krixdina/miniconda3/envs/robot_retargeter/bin/python`，最后使用命令搜索到的 `python`。
+- 请预留最终 NPZ、逐文件日志和 JSONL manifest 所需空间；中间 CSV/PKL 不会占用空间。
+
+## 最简全量运行
+
+数据集位于默认目录 `dataset/MotionDecode/samples` 时：
 
 ```bash
-scripts/dr02_data_converter/convert_single_motiondecode_to_dr02.sh \
-  --input dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
-  --fps 120 \
-  --overwrite
+bash command.sh
 ```
 
-## DR02 两阶段 coarse-to-fine IK 测试
+该命令固定以 `120` FPS 转换全部 CSV，默认并发数为 `4`。
 
-下面的独立测试流水线使用 `config/robot/DR02_two_stage_optimization_test.yaml`，不会修改或启用普通 `DR02.yaml`。默认在最后打开 MuJoCo，同时显示 G1（+Y）与重定向后的 DR02（-Y）。
+## 常用运行方式
+
+指定 MotionDecode 输入根目录（也决定输出路径的镜像层级）：
+
+```bash
+MOTIONDECODE_ROOT=/data/MotionDecode/samples bash command.sh
+```
+
+指定解释器与并发数，例如使用 8 个独立转换进程：
 
 ```bash
 PYTHON_BIN=/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  bash scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_two_stage_optimization.sh \
-  --input 'dataset/MotionDecode/samples/4.Martial_Arts/Eagle_Claw_Fist_2/MA_Eagle_Claw_Fist_2.csv' \
-  --fps 120 \
-  --overwrite
+JOBS=8 \
+bash command.sh
 ```
 
-- `--input PATH`：必填，MotionDecode 的 G1 CSV。
-- `--fps FPS`：各阶段共同使用的源帧率，默认 `120`。
-- `--output-name NAME`：可选的输出文件名 stem；缺省时采用输入 CSV 文件名。必须是单个文件名，不能包含 `/`。
-- `--no-compare`：仅完成 adapter、关键点、两阶段 IK 与 NPZ 导出，不打开最终 G1/DR02 MuJoCo 对比窗口；`--no-viewer` 是兼容别名。
-- `--overwrite`：允许替换该独立 two-stage 测试目录内同名的输出。
-- `PYTHON_BIN`：可选环境变量，用于指定 Python 解释器。
-
-二阶段开关与粗阶段收敛参数位于 `two_stage_optimization`：`enabled` 控制是否运行首帧初始化，`optimization_mode: first_frame_only` 表示只有第 0 帧会先运行粗阶段；`initialize_root_from_target: true` 会在粗优化前把 floating root 的 xyz 与 `root_target_keypoint`（默认 `hips_mean`）的 yaw 对齐，并清除 roll/pitch。`coarse.max_additional_iterations` 是首次求解之后最多允许的额外求解次数（允许 `0`，`10` 忠实对应 GMR 的循环语义），`coarse.convergence_threshold` 控制停止条件。第 0 帧粗阶段只使用 YAML 明列的 `coarse.ik_match_table` FrameTask 和基础关节限位，随后在同一构型上进行细优化；其细优化保留普通 FrameTask/接触任务，但不使用 PostureTask 或 FrameVelocityLimit。第 1 帧及以后完全使用项目原有 `ik_match_table`、接触锁定、时间连续性正则及帧间速度硬约束。
-
-25 动作批量 QA 可用 `scripts/dr02_data_converter/compare_dr02_retarget_quality.py` 比较同一目标 PKL 下的基线与候选 CSV，输出有限值、完整 fine-task、四末端位置/方向误差、关节限位和速度预算指标。例如：
+小批量试跑 10 个文件：
 
 ```bash
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_dr02_retarget_quality.py \
-  --keypoints-pkl output_data/keypoints/DR02_two_stage_optimization_test/MA_Eagle_Claw_Fist_2_from_g1_keypoints.pkl \
-  --baseline-csv output_data/robot_motion/MA_Eagle_Claw_Fist_2_from_g1_DR02_temporal_constraints_test.csv \
-  --candidate-csv output_data/robot_motion/MA_Eagle_Claw_Fist_2_from_g1_DR02_two_stage_optimization_test.csv \
-  --output-json /tmp/eagle_quality.json --output-csv /tmp/eagle_quality.csv
+LIMIT=10 bash command.sh
 ```
 
-质量工具会在进入 MuJoCo 前拒绝 CSV 中的 `NaN` 或 `Inf`（以非零退出并说明输入包含非有限 qpos）；JSON 输出采用严格 JSON 编码，不会写出 `NaN`/`Infinity`。启用首帧二阶段时，root 初始化后会刷新普通与非激活接触目标，再进入 coarse/fine；第 1 帧及以后仍是原有时间约束路径。
-
-对已生成的结果进行非 GUI 校验：
+推荐先用一小批数据确认环境、输出和性能，再以合适的 `JOBS` 启动全量任务：
 
 ```bash
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Eagle_Claw_Fist_2/MA_Eagle_Claw_Fist_2.csv' \
-  --target-csv 'output_data/robot_motion/eagle_claw_fist_2_two_stage_from_g1_DR02_two_stage_optimization_test.csv' \
-  --source-fps 120 --target-fps 120 --render-fps 120 --validate-only
+MOTIONDECODE_ROOT=/data/MotionDecode/samples \
+PYTHON_BIN=/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+JOBS=4 LIMIT=10 \
+bash command.sh
+
+MOTIONDECODE_ROOT=/data/MotionDecode/samples \
+PYTHON_BIN=/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+JOBS=8 \
+bash command.sh
 ```
 
-关闭转换后的对照查看器（适合批处理或无图形界面环境）：
+## `command.sh` 可调环境变量
 
-```bash
-scripts/dr02_data_converter/convert_single_motiondecode_to_dr02.sh \
-  --input dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
-  --fps 120 \
-  --no-compare \
-  --overwrite
-```
+| 变量 | 默认值 | 含义 | 示例 | 注意事项 |
+|---|---|---|---|---|
+| `MOTIONDECODE_ROOT` | `${仓库根目录}/dataset/MotionDecode/samples` | 输入 MotionDecode CSV 的数据集根目录。`command.sh` 同时将其传为底层脚本的 `--input-dir` 和 `--dataset-root`。 | `MOTIONDECODE_ROOT=/data/MotionDecode/samples bash command.sh` | 目录必须存在；因为二者相同，调用 `command.sh` 时只能从该根目录开始扫描，不能仅指定其中某个子目录。 |
+| `JOBS` | `4` | 同时运行的独立转换进程数。 | `JOBS=8 bash command.sh` | 必须为正整数。每个进程都会加载 MuJoCo/IK；请按 CPU、内存和磁盘吞吐调整。`command.sh` 的默认值为 4，但显式设置时不再由底层脚本限制为最多 4。 |
+| `LIMIT` | `0` | 最多转换的文件数量。 | `LIMIT=10 bash command.sh` | `0` 表示不限制、转换所有匹配 CSV；必须为非负整数。文件按路径排序后取前 N 个。 |
+| `PYTHON_BIN` | 自动选择 | 用于运行转换和 manifest 工具的 Python 解释器。 | `PYTHON_BIN=/path/to/python bash command.sh` | 必须指向可运行且已安装项目依赖的解释器。 |
 
-`--no-compare` 仅跳过最后的 G1/DR02 对照，不影响 CSV、PKL 或 NPZ 输出。
-旧参数 `--no-viewer` 仍可用，但已弃用，等价于 `--no-compare`。
+`command.sh` 不读取位置参数；例如 `bash command.sh --limit 10` 不会把 `--limit` 透传给底层脚本。请改用上面的 `LIMIT=10 bash command.sh` 形式。
 
-### 带时间连续性与帧间速度约束的单文件测试
+此外，`command.sh` 固定向底层脚本传入 `--fps 120`，不能通过环境变量调整 FPS。
 
-该命令先使用 `config/robot/DR02.yaml` 生成 DR02 目标关键点，再使用
-`config/robot/DR02_temporal_constraints_test.yaml` 执行带时间连续性正则和
-帧间关节速度硬约束的 IK，最后导出测试版 CSV、NPZ，并默认打开 MuJoCo
-对照查看器，同时显示原始 MotionDecode G1 和本次生成的受约束 DR02。
+## 输出、日志与 manifest
 
-```bash
-scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_temporal_velocity_constraints.sh \
-  --input dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
-  --fps 120 \
-  --overwrite
-```
-
-关闭对照查看器：
-
-```bash
-scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_temporal_velocity_constraints.sh \
-  --input dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
-  --fps 120 \
-  --no-compare \
-  --overwrite
-```
-
-启动项说明：
-
-| 启动项 | 是否必需 | 默认值 | 说明 |
-|---|---|---|---|
-| `--input PATH` | 是 | 无 | 输入的 MotionDecode G1 CSV。文件必须存在且扩展名为 `.csv`。 |
-| `--fps FPS` | 否 | `120` | 输入动作的真实采样率。该值会传给接触检测、帧间速度预算和最终 NPZ，必须是正数。 |
-| `--output-name NAME` | 否 | 输入 CSV 的文件名（不含扩展名） | 自定义本次测试输出的文件名前缀。只能是单个文件名，不能包含 `/`。适合对同一输入测试多组参数时避免重名。 |
-| `--no-compare` | 否 | 未启用 | 跳过最后的 G1/DR02 MuJoCo 对照，适合服务器、自动测试和批处理。 |
-| `--no-viewer` | 否 | 未启用 | 已弃用；等价于 `--no-compare`，仅为兼容旧调用保留。 |
-| `--overwrite` | 否 | 未启用 | 允许替换同名测试产物。未启用且任一目标文件已存在时，脚本会停止，避免误覆盖。 |
-| `-h`, `--help` | 否 | 未启用 | 显示脚本帮助并退出。 |
-
-查看帮助：
-
-```bash
-scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_temporal_velocity_constraints.sh --help
-```
-
-测试产物目录：
+`command.sh` 的输出根目录固定为：
 
 ```text
-output_data/dr02_data_converter/temporal_constraints_test/normalized/  # 规范化后的 G1 CSV
-output_data/keypoints/DR02_temporal_constraints_test/                  # DR02 目标关键点 PKL
-output_data/robot_motion/                                              # 带约束的 DR02 qpos CSV
-output_data/dr02_data_converter/temporal_constraints_test/npz/         # 强化学习 NPZ
+output_data/dr02_data_converter/
+├── npz/                 # 最终 NPZ，镜像输入 CSV 的相对目录
+├── logs/                # 每个输入 CSV 一个转换日志（.csv.log）
+└── manifests/           # 本次运行的 JSONL 结果清单
 ```
 
-默认输出文件名会包含 `DR02_temporal_constraints_test`，因此不会与普通
-`DR02.yaml` 流程产生的 `_DR02.csv` 混淆。若已经激活 `robot_retargeter`
-Conda 环境，无需额外设置 `PYTHON_BIN`；如需指定解释器，可在命令前设置：
+例如输入：
+
+```text
+dataset/MotionDecode/samples/category/action/motion.csv
+```
+
+对应最终文件为：
+
+```text
+output_data/dr02_data_converter/npz/category/action/motion_from_g1_DR02.npz
+```
+
+NPZ 文件先写入同目录的临时文件，成功后才原子替换为最终文件；正常完成的结果不会依赖任何中间数据。
+
+## 覆盖、失败与复跑
+
+经由 `command.sh` 启动时，不会传递 `--overwrite` 或 `--fail-fast`，因此行为如下：
+
+- 若最终 NPZ 已存在，该文件会被跳过，不会覆盖。
+- 某一个文件转换失败时，其他已排队文件仍会继续执行；最后命令会以非零状态退出。
+- 重跑同一命令会自动跳过已成功发布的 NPZ，并重试此前失败或尚未生成的文件。
+- 每次运行都会生成一个带 UTC 时间戳的 JSONL manifest，记录 `success`、`failed`、`skipped` 状态、耗时和日志路径。
+
+如需显式覆盖、失败后停止继续调度、单独指定输入子目录、输出镜像根、FPS、manifest 或文件匹配模式，请直接调用底层脚本。
+
+## 底层批量脚本的完整接口
+
+在仓库根目录执行：
+
+```bash
+scripts/dr02_data_converter/run_dr02_batch.sh --input-dir DIR [options]
+```
+
+它支持以下参数：
+
+| 参数 | 默认值 | 含义与示例 | 注意事项 |
+|---|---|---|---|
+| `--input-dir DIR` | 无，必填 | 扫描该目录及其子目录中的输入文件。示例：`--input-dir dataset/MotionDecode/samples/4.Martial_Arts` | 必须存在，且必须位于 `--dataset-root` 内。 |
+| `--dataset-root DIR` | `dataset/MotionDecode/samples` | 用于计算输入相对路径并镜像到 NPZ 输出目录。示例：`--dataset-root /data/MotionDecode/samples` | 必须存在；不要把它设为 `--input-dir` 之外的目录。 |
+| `--fps FPS` | `120` | 源动作采样率。示例：`--fps 120` | 必须为正整数。 |
+| `--jobs N` | `min(4, CPU 核数)` | 独立转换进程数。示例：`--jobs 8` | 必须为正整数。 |
+| `--manifest PATH` | `output_data/dr02_data_converter/manifests/dr02_batch_<UTC 时间戳>.jsonl` | 本次 JSONL 结果清单位置。示例：`--manifest output_data/dr02_data_converter/manifests/full_run.jsonl` | 路径必须位于仓库的 `output_data/` 下；相对路径按仓库根目录解释。 |
+| `--overwrite` | 未启用 | 覆盖已存在的最终 NPZ。 | 仅替换最终 NPZ；请确认目标范围后再使用。 |
+| `--limit N` | `0` | 最多处理 N 个文件。示例：`--limit 10` | `0` 表示全部；按排序后的路径取前 N 个。 |
+| `--max-files N` | `--limit` 的别名 | 示例：`--max-files 10` | 与 `--limit` 行为相同。 |
+| `--pattern GLOB` | `*.csv` | 按文件名 glob 筛选。示例：`--pattern 'MA_*.csv'` | 使用单引号避免 shell 提前展开；匹配不区分扩展名大小写。 |
+| `--fail-fast` | 未启用 | 一旦已完成的转换进程报告失败，停止继续调度后续文件。 | 已经启动的并发任务仍会等待完成。 |
+| `-h`、`--help` | 未启用 | 显示帮助并退出。 | 无。 |
+
+底层脚本同样识别 `PYTHON_BIN` 环境变量。其自动选择顺序为：仓库 `.conda/bin/python`、仓库 `conda/bin/python`、`python`、`python3`。
+
+### 指定输入子目录和输出镜像根
+
+底层脚本的最终输出根仍固定为 `output_data/dr02_data_converter/npz/`；没有支持自定义 NPZ 输出根的参数。可以通过 `--dataset-root` 控制该固定输出根下的镜像相对路径：
 
 ```bash
 PYTHON_BIN=/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-scripts/dr02_data_converter/convert_single_motiondecode_to_dr02_temporal_velocity_constraints.sh \
-  --input dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
-  --fps 120 \
-  --no-compare
-```
-
-### 批量数据转换测试
-```
 scripts/dr02_data_converter/run_dr02_batch.sh \
-  --input-dir dataset/MotionDecode/samples/1.1.Basic_Movement_Category/1.1.1.High_Dynamic_Movement/1.1.1.1.Standing_High_Jump \
+  --input-dir /data/MotionDecode/samples/4.Martial_Arts \
+  --dataset-root /data/MotionDecode/samples \
   --fps 120 \
-  --jobs 4
+  --jobs 8 \
+  --manifest output_data/dr02_data_converter/manifests/martial_arts.jsonl
 ```
-### 重定向数据展示
-```
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv \
-  dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv \
-  --target-csv \
-  output_data/robot_motion/4-martial-arts-muay-thai-ma-muay-thai-e6e16bd6cfe7_from_g1_DR02.csv \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 120
 
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv \
-  dataset/MotionDecode/samples/1.1.Basic_Movement_Category/1.1.1.High_Dynamic_Movement/1.1.1.1.Standing_High_Jump/BM_Standing_High_Jump_00092.csv \
-  --target-csv \
-  output_data/robot_motion/1.1.Basic_Movement_Category/1.1.1.High_Dynamic_Movement/1.1.1.1.Standing_High_Jump/1-1-basic-movement-category-1-1-1-high-dynamic-movement-1-1-1-1-standing-high-jump-bm-standing-h-0010fca813c7_from_g1_DR02.csv \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-```
-### 25 条明显关节异常动作：重定向前后对比
-
-说明：以下动作按自动 QA 严重程度排序。G1 位于 +Y，DR02 位于 -Y；播放到每条命令标注的重点时间后按空格暂停，再用 `,` / `.` 逐帧检查。
+### 覆盖已有结果并启用 fail-fast
 
 ```bash
-# [01] 武术：MA_Eagle_Claw_Fist_2
-# 重点观察：t=22.208s，frame=2665；right_shoulder_z_joint 连续贴限 1819 帧；手臂 P95=25.5cm/141.3°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Eagle_Claw_Fist_2/MA_Eagle_Claw_Fist_2.csv' \
-  --target-csv 'output_data/robot_motion/qa06_eagle_claw_fist_2_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [02] 球类：BGI_Serve_00155
-# 重点观察：t=6.175s，frame=741；left_shoulder_z_joint 连续贴限 497 帧；手臂 P95=10.0cm/161.0°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/3.3.Ball_Game_Interaction/3.3.6.Tennis/3.3.6.3.Serve/BGI_Serve_00155.csv' \
-  --target-csv 'output_data/robot_motion/qa23_tennis_serve_155_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [03] 球类：BGI_Smash_00221
-# 重点观察：t=5.933s，frame=712；left_shoulder_z_joint 连续贴限 413 帧；手臂 P95=10.8cm/156.0°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/3.3.Ball_Game_Interaction/3.3.2.Badminton/3.3.2.2.Smash/BGI_Smash_00221.csv' \
-  --target-csv 'output_data/robot_motion/qa24_badminton_smash_221_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [04] 武术：MA_Long_Fist_3
-# 重点观察：t=47.975s，frame=5757；left_shoulder_z_joint 连续贴限 480 帧；手臂 P95=10.6cm/87.9°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Long_Fist_3/MA_Long_Fist_3.csv' \
-  --target-csv 'output_data/robot_motion/qa02_long_fist_3_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [05] 球类：BGI_Serve_00005
-# 重点观察：t=8.742s，frame=1049；left_shoulder_z_joint 连续贴限 800 帧；手臂 P95=11.3cm/163.6°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/3.3.Ball_Game_Interaction/3.3.6.Tennis/3.3.6.3.Serve/BGI_Serve_00005.csv' \
-  --target-csv 'output_data/robot_motion/qa22_tennis_serve_05_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [06] 舞蹈：DAN_havana
-# 重点观察：t=67.708s，frame=8125；right_shoulder_z_joint 连续贴限 775 帧；手臂 P95=8.7cm/44.0°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/5.Dance/5.3.Pop_Dance/20260108/havana/DAN_havana.csv' \
-  --target-csv 'output_data/robot_motion/qa18_havana_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [07] 武术：MA_Muay_Thai
-# 重点观察：t=29.567s，frame=3548；left_shoulder_z_joint 连续贴限 1141 帧；手臂 P95=8.8cm/90.6°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv' \
-  --target-csv 'output_data/robot_motion/qa01_muay_thai_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [08] 武术：MA_wubuquan_1
-# 重点观察：t=20.717s，frame=2486；left_shoulder_z_joint 连续贴限 437 帧；手臂 P95=9.8cm/78.4°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/wubuquan_1/MA_wubuquan_1.csv' \
-  --target-csv 'output_data/robot_motion/qa04_wubuquan_1_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [09] 情绪/表演：EESB_Intense_Joy_00058
-# 重点观察：t=20.800s，frame=2496；left_shoulder_z_joint 连续贴限 426 帧；手臂 P95=8.8cm/77.6°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/1.10.Emotional_Expressions_and_Social_Behaviors/1.10.6.Dramatic_Emotional_Gestures/1.10.6.3.Intense_Joy/EESB_Intense_Joy_00058.csv' \
-  --target-csv 'output_data/robot_motion/qa26_intense_joy_58_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [10] 球类：BGI_Spike_00112
-# 重点观察：t=7.658s，frame=919；left_shoulder_z_joint 连续贴限 537 帧；手臂 P95=8.5cm/159.4°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/3.3.Ball_Game_Interaction/3.3.4.Volleyball/3.3.4.3.Spike/BGI_Spike_00112.csv' \
-  --target-csv 'output_data/robot_motion/qa20_volleyball_spike_112_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [11] 舞蹈：DAN_bad
-# 重点观察：t=68.900s，frame=8268；left_shoulder_z_joint 连续贴限 560 帧；手臂 P95=8.6cm/72.0°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/5.Dance/5.3.Pop_Dance/20260327/bad/DAN_bad.csv' \
-  --target-csv 'output_data/robot_motion/qa12_bad_dance_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [12] 武术：MA_Long_Fist_2
-# 重点观察：t=37.575s，frame=4509；right_shoulder_y_joint 连续贴限 413 帧；手臂 P95=8.7cm/23.6°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Long_Fist_2/MA_Long_Fist_2.csv' \
-  --target-csv 'output_data/robot_motion/qa07_long_fist_2_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [13] 情绪/表演：EESB_Intense_Joy_00041
-# 重点观察：t=15.183s，frame=1822；right_shoulder_y_joint 连续贴限 659 帧；手臂 P95=6.5cm/20.4°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/1.10.Emotional_Expressions_and_Social_Behaviors/1.10.6.Dramatic_Emotional_Gestures/1.10.6.3.Intense_Joy/EESB_Intense_Joy_00041.csv' \
-  --target-csv 'output_data/robot_motion/qa30_intense_joy_41_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [14] 情绪/表演：EESB_Theatrical_Exaggerated_Emo_00018
-# 重点观察：t=37.400s，frame=4488；left_shoulder_z_joint 连续贴限 666 帧；手臂 P95=7.3cm/67.0°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/1.10.Emotional_Expressions_and_Social_Behaviors/1.10.8.Performative_Emotions/1.10.8.1.Theatrical_Exaggerated_Emo/EESB_Theatrical_Exaggerated_Emo_00018.csv' \
-  --target-csv 'output_data/robot_motion/qa27_theatrical_emotion_18_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [15] 舞蹈：DAN_cheating_on_you
-# 重点观察：t=44.217s，frame=5306；left_shoulder_y_joint 连续贴限 534 帧；手臂 P95=6.8cm/34.2°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/5.Dance/5.3.Pop_Dance/20260327/cheating_on_you/DAN_cheating_on_you.csv' \
-  --target-csv 'output_data/robot_motion/qa16_cheating_on_you_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [16] 球类：BGI_Spike_00171
-# 重点观察：t=6.842s，frame=821；left_shoulder_z_joint 连续贴限 584 帧；手臂 P95=8.3cm/165.6°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/3.3.Ball_Game_Interaction/3.3.4.Volleyball/3.3.4.3.Spike/BGI_Spike_00171.csv' \
-  --target-csv 'output_data/robot_motion/qa25_volleyball_spike_171_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [17] 武术：MA_Long_Fist_11
-# 重点观察：t=13.167s，frame=1580；left_shoulder_z_joint 连续贴限 241 帧；手臂 P95=9.7cm/78.9°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Long_Fist_11/MA_Long_Fist_11.csv' \
-  --target-csv 'output_data/robot_motion/qa05_long_fist_11_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [18] 舞蹈：DAN_the_girls
-# 重点观察：t=37.117s，frame=4454；left_shoulder_z_joint 连续贴限 332 帧；手臂 P95=6.5cm/30.1°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/5.Dance/5.3.Pop_Dance/D0325/the_girls/DAN_the_girls.csv' \
-  --target-csv 'output_data/robot_motion/qa13_the_girls_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [19] 舞蹈：DAN_light_rain
-# 重点观察：t=16.258s，frame=1951；left_shoulder_z_joint 连续贴限 253 帧；手臂 P95=7.8cm/31.4°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/5.Dance/5.3.Pop_Dance/D0325/light_rain/DAN_light_rain.csv' \
-  --target-csv 'output_data/robot_motion/qa15_light_rain_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [20] 球类：BGI_Spike_00087
-# 重点观察：t=6.883s，frame=826；left_shoulder_z_joint 连续贴限 631 帧；手臂 P95=7.6cm/161.7°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/3.3.Ball_Game_Interaction/3.3.4.Volleyball/3.3.4.3.Spike/BGI_Spike_00087.csv' \
-  --target-csv 'output_data/robot_motion/qa21_volleyball_spike_87_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [21] 武术：MA_Tiger_Fist_8
-# 重点观察：t=3.683s，frame=442；right_shoulder_z_joint 连续贴限 233 帧；手臂 P95=8.8cm/32.4°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Tiger_Fist_8/MA_Tiger_Fist_8.csv' \
-  --target-csv 'output_data/robot_motion/qa03_tiger_fist_8_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [22] 武术：MA_Mantis_Fist_1
-# 重点观察：t=12.017s，frame=1442；right_shoulder_z_joint 连续贴限 233 帧；手臂 P95=8.5cm/35.5°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Mantis_Fist_1/MA_Mantis_Fist_1.csv' \
-  --target-csv 'output_data/robot_motion/qa11_mantis_fist_1_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [23] 舞蹈：DAN_lips_hips_kiss
-# 重点观察：t=13.158s，frame=1579；right_shoulder_z_joint 连续贴限 142 帧；手臂 P95=6.1cm/21.1°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/5.Dance/5.3.Pop_Dance/D0325/lips_hips_kiss/DAN_lips_hips_kiss.csv' \
-  --target-csv 'output_data/robot_motion/qa14_lips_hips_kiss_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [24] 舞蹈：DAN_running
-# 重点观察：t=96.833s，frame=11620；right_shoulder_z_joint 连续贴限 240 帧；手臂 P95=6.0cm/20.4°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/5.Dance/5.3.Pop_Dance/D0403/running/DAN_running.csv' \
-  --target-csv 'output_data/robot_motion/qa17_running_dance_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
-# [25] 武术：MA_Long_Fist_6
-# 重点观察：t=10.300s，frame=1236；right_elbow_joint 连续贴限 133 帧；手臂 P95=6.4cm/20.4°
-/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
-  scripts/dr02_data_converter/compare_g1_dr02_mujoco.py \
-  --source-csv 'dataset/MotionDecode/samples/4.Martial_Arts/Long_Fist_6/MA_Long_Fist_6.csv' \
-  --target-csv 'output_data/robot_motion/qa09_long_fist_6_from_g1_DR02.csv' \
-  --source-fps 120 \
-  --target-fps 120 \
-  --render-fps 60
-
+PYTHON_BIN=/home/krixdina/miniconda3/envs/robot_retargeter/bin/python \
+scripts/dr02_data_converter/run_dr02_batch.sh \
+  --input-dir /data/MotionDecode/samples \
+  --dataset-root /data/MotionDecode/samples \
+  --jobs 8 \
+  --overwrite \
+  --fail-fast
 ```
+
+## 后台运行、查看进度与中断
+
+可将标准输出和标准错误写入总日志，在后台执行：
+
+```bash
+mkdir -p output_data/dr02_data_converter/logs
+nohup bash command.sh > output_data/dr02_data_converter/logs/batch_launcher.log 2>&1 &
+```
+
+查看启动总日志：
+
+```bash
+tail -f output_data/dr02_data_converter/logs/batch_launcher.log
+```
+
+查看某个输入文件的详细转换日志（路径与输入 CSV 的相对路径一致，末尾添加 `.log`）：
+
+```bash
+tail -f output_data/dr02_data_converter/logs/4.Martial_Arts/Muay_Thai/MA_Muay_Thai.csv.log
+```
+
+按 `Ctrl-C`（前台）或向启动脚本进程发送 `SIGINT`/`SIGTERM`（后台）可中断任务。脚本会终止仍在运行的子进程并清理由这次中断留下的临时 NPZ；已成功发布的最终 NPZ 会保留。之后直接使用同一命令复跑即可跳过这些已完成文件。

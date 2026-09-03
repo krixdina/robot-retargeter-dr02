@@ -609,7 +609,8 @@ def build_robot_retarget_keypoints(
 		body_slots,
 		source_positions,
 	)
-	# link_scales 为 dict[str, float | np.ndarray]，每个连杆名称对应目标连杆长度与源连杆长度的比值；当前实现中该值为形状 (F,) 的 float32 数组，表示每一帧的缩放比例。
+	# link_scales 为 dict[str, float | np.ndarray]，每个连杆名称对应目标连杆长度与源连杆长度的比值；当前实现里字典中的值为 (F,) 的 float32 数组，表示每一帧的缩放比例。
+	# 这里的 (F,) 仅描述字典中单个连杆对应数组的形状；整个字典按连杆名称索引，并不具有数组形状。
 	# link_scale_is_static 为 dict[str, bool]，每个连杆名称对应一个布尔标记，用于表示该连杆的缩放比例是否在所有帧中保持不变；当前实现均为 False。
 	link_scales, link_scale_is_static = compute_link_scale_factors(
 		target_robot_link_lengths,
@@ -933,6 +934,7 @@ def main() -> None:
 	source_robot_links = load_robot_links_config(source_robot_config_path)
 	target_robot_links = load_robot_links_config(target_robot_config_path)
 	source_contact_links = load_yaml_body_list_config(source_robot_config_path, "contact_links")
+	# 将各机器人具体的接触 body 名称归一为统一语义名，供后续接触匹配、贴地校正和结果导出使用。
 	contact_names = tuple(canonicalize_contact_name(name) for name in source_contact_links)
 
 	# 加载形状为 [帧数, nq] 的动作数组；第 0 维为 CSV 中的动作帧数，第 1 维为每帧完整的 MuJoCo 广义坐标。
