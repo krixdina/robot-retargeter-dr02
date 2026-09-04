@@ -409,6 +409,7 @@ class RobotRetarget:
         self.keypoints_pos = keypoints_data["positions"] 
         self.keypoints_quat = keypoints_data["quaternions"]  
         # 建立接触点名称索引并读取每帧布尔接触状态，供支撑期末端位置锁定约束使用。
+        # 这些名称由上游将源机器人接触 body 归一化后写入，例如 left_toe；它们标识 contact_states 中每一列对应的语义接触部位，而非目标 MJCF 的具体 body 名称。
         self.contact_names = keypoints_data.get("contact_names", [])
         self.contact_state_name_to_idx = {
             contact_name: idx for idx, contact_name in enumerate(self.contact_names)
@@ -424,6 +425,7 @@ class RobotRetarget:
         self.configuration = mink.Configuration(self.model)
 
         self.tasks = []
+        # 按任务加入顺序记录对应的目标机器人 body 名称；该列表在调试绘制时用于显示所有受 IK 任务约束的机器人姿态。
         self.robot_frame_names = []  # Robot body name corresponding to each task
 
         # Apply offsets to the configured joint limits: raise the lower bound
@@ -737,7 +739,9 @@ class RobotRetarget:
             self.frame_velocity_limit.begin_frame(previous_q)
 
     # 用途：为可识别的接触 body 预先创建位置锁定任务，并保存每段连续接触所需的固定目标位置。
-    # 不直接返回数值；会向 self.contact_targets（接触约束描述的列表）加入可用接触项，并将对应的位置任务加入总 IK 任务集合。
+    # 用途补充：将目标机器人 MJCF 中的具体 contact body 与 pkl 中统一语义接触名称及其状态列按顺序配对，使 IK 可将每一列接触状态作用于正确的目标末端。
+    # 例如，G1 的 left_wrist_yaw_link（左腕偏航接触 body）在上游归一化为 left_hand（左手语义接触名）存入 pkl 文件中，
+    # 在本代码中读取 pkl 时需要将这个统一语义接触名与 DR02 的 left_hand_link（左手接触 body）建立关联。
     def setup_contact_targets(self):
         # 未配置机器人接触 body，或关键点文件不含接触状态名称时，无法建立一一对应的锁定任务。
         if not self.contact_body_names or not self.contact_state_name_to_idx:
@@ -752,6 +756,7 @@ class RobotRetarget:
                 )
             return
 
+        # 前者是目标机器人 MJCF 中可被 IK 锁定的具体 body 名称，后者是 pkl 文件中按相同顺序保存的统一语义接触名称；二者的下标对应关系将状态映射到目标末端。
         # 为每对“机器人接触 body 与输入接触状态名称”建立描述，供每帧根据实际接触状态启用或解除位置锁定。
         for body_name, contact_name in zip(self.contact_body_names, self.contact_names):
             contact_state_idx = self.contact_state_name_to_idx.get(contact_name)
@@ -791,16 +796,26 @@ class RobotRetarget:
             ]
             print(f"[contact target] enabled: {summary}")
 
+    # 用途：为目标机器人中的指定 body 找到关键点文件中可提供其目标位置的源关键点名称，以建立接触位置锁定约束。
+    # 输入：body_name，目标机器人 MJCF 中待施加接触约束的具体 body 名称。
+    # 输出：返回可用于读取逐帧目标位姿的源关键点名称；若该 body 没有直接同名关键点且未配置映射关系，则返回 None。
     def _resolve_body_source_keypoint(self, body_name):
+        # 优先使用与目标 body 同名的输入关键点，避免在名称已直接对应时依赖额外映射。
         if body_name in self.keypoint_name_to_idx:
             return body_name
+        # 对名称不同的情况，使用建立普通 IK 任务时记录的“目标 body 到输入关键点”映射查找对应关系。
         return self.body_name_to_source_keypoint.get(body_name)
 
+    # 用途：为目标机器人中指定的接触末端取得唯一的位置锁定 IK 任务；已创建时复用，首次需要时创建并注册到总求解任务中。
+    # 输入：body_name，目标机器人 MJCF 中需要在支撑期限制位置的具体 body 名称。
+    # 输出：返回该 body 对应的位置锁定任务；同时首次创建时更新任务缓存、总任务列表、机器人 body 记录及误差记录。
     def _ensure_contact_task(self, body_name):
+        # 同一接触末端只保留一个任务对象，避免重复加入会对同一 body 施加多份位置约束。
         existing_task = self.body_name_to_contact_task.get(body_name)
         if existing_task is not None:
             return existing_task
 
+        # 创建仅约束平移位置的 IK 任务；朝向代价为零，因此接触锁定不会额外限制足端或手端的转动。
         task = mink.FrameTask(
             frame_name=body_name,
             frame_type="body",
@@ -808,6 +823,7 @@ class RobotRetarget:
             orientation_cost=0.0,
             lm_damping=1,
         )
+        # 将新任务登记到缓存和全局求解集合，并初始化误差收集槽，使后续逐帧更新和诊断可使用同一任务对象。
         self.body_name_to_contact_task[body_name] = task
         self.tasks.append(task)
         self.robot_frame_names.append(body_name)
@@ -820,10 +836,15 @@ class RobotRetarget:
         target_quat = self.keypoints_quat[frame_idx, keypoint_idx]
         return target_pos, target_quat
 
+    # 用途：从目标机器人当前的 MuJoCo 运动学状态中查询指定刚体的世界位置和世界朝向，供非接触分支设置接触任务的目标。
+    # 输入：body_name 表示目标机器人 MJCF 中待查询的具体 body 名称；self 中的模型和配置数据表示当前帧 IK 求解开始前或迭代后的机器人状态。
+    # 输出：返回该 body 的世界系 xyz 位置与 wxyz 四元数朝向；若模型中不存在该名称，则抛出异常而不返回位姿。
     def _get_body_pose(self, body_name):
+        # 将 MJCF body 名称解析为模型内部索引，并显式拒绝无效名称，避免误用负索引读取其他刚体。
         body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
         if body_id < 0:
             raise ValueError(f"Body not found: {body_name}")
+        # 当前配置数据中的 xpos 与 xquat 分别保存正向运动学得到的世界位置和世界朝向；四元数采用 MuJoCo 的 wxyz 顺序。
         return self.configuration.data.xpos[body_id], self.configuration.data.xquat[body_id]
 
     def _build_contact_mean_positions(self, contact_state_idx, source_keypoint_name):
@@ -853,12 +874,17 @@ class RobotRetarget:
 
         return mean_positions
 
+    # 用途：依据当前帧的布尔接触状态，在“连续支撑段的固定平均位置”和“该帧普通关键点位置”之间选择接触位置候选，并告知调用者锁定是否激活。
+    # 输入：frame_idx 表示当前动作帧编号；contact_target 表示某个目标机器人接触刚体的状态列、对应关键点和预计算支撑段平均位置等描述。
+    # 输出：返回“位置候选、是否接触”的二元组；接触时位置候选为支撑段平均位置，非接触时为普通关键点位置，但调用者当前会用机器人刚体的求解前位姿覆盖非接触候选。
     def _get_contact_locked_position(self, frame_idx, contact_target):
+        # 先取得该末端在当前帧原本要跟随的普通关键点位置，并从接触状态矩阵中读取对应接触点的真假标记。
         contact_state_idx = contact_target["contact_state_idx"]
         source_keypoint_name = contact_target["source_keypoint_name"]
 
         target_pos, _ = self._get_target_pose(frame_idx, source_keypoint_name)
         in_contact = bool(self.contact_seq[frame_idx, contact_state_idx])
+        # 支撑期返回整段共享的平均位置以抑制滑动；摆动期返回普通逐帧位置，并由 False 让调用者进入非锁定处理分支。
         if in_contact:
             return contact_target["mean_positions"][frame_idx], True
         return target_pos, False

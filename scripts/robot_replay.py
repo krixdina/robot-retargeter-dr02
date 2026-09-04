@@ -1027,7 +1027,7 @@ def main() -> None:
 	# 为重定向后的每一列关键点建立名称索引：骨盆、语义连杆终点，以及上一步补充的脚端/脚趾点。
 	# hips_mean 是左右髋部起点的中心，作为整条骨架唯一根节点（第 0 列）；其余关键点只保存各连杆的子端，避免共享父节点重复出现。
 	keypoint_names = ["hips_mean", *list(target_robot_links.keys()), *extra_keypoint_names]
-	# 对每帧取处于接触状态的最低接触点高度（无接触时沿用上一帧，并可低通滤波），再将所有关键点整体沿 z 轴下移该值，使支撑点贴地。
+	# 取每帧中处于接触状态的最低接触点高度（无接触时沿用上一帧，并可低通滤波），再将所有关键点整体沿 z 轴下移该值，使支撑点贴地。
 	retarget_keypoints, contact_height_offsets = offset_keypoints_by_contact_height(
 		keypoints=retarget_keypoints,
 		keypoint_names=keypoint_names,
