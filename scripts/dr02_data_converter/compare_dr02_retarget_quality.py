@@ -11,10 +11,8 @@ constraint).
 
 For each motion it also checks frame alignment and finite values, four hand/foot
 end-effector position/orientation errors, joint-limit violations, and velocity
-budget violations.  The per-motion JSON/CSV reports produced here are the data
-used to derive the 25-motion QA statistics in
-``docs/two_stage_optimization_debugging_zh.md``; that document then aggregates
-the baseline-versus-candidate results across motions.
+budget violations. The per-motion JSON/CSV reports support the QA metrics
+documented in ``docs/dr02_retargeting.md``.
 """
 
 from __future__ import annotations
@@ -107,7 +105,7 @@ def main() -> None:
     parser.add_argument("--keypoints-pkl", required=True, type=Path, help="Generated DR02 target-keypoint PKL")
     parser.add_argument("--baseline-csv", required=True, type=Path)
     parser.add_argument("--candidate-csv", required=True, type=Path)
-    parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "config/robot/DR02_temporal_constraints_test.yaml")
+    parser.add_argument("--config", type=Path, default=PROJECT_ROOT / "config/robot/DR02.yaml")
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-csv", type=Path, help="Optional one-row-per-method CSV summary")
     args = parser.parse_args()

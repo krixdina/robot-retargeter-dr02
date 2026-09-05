@@ -430,8 +430,7 @@ def build_robot_replay_buffers(
 	return positions.astype(np.float32), quaternions.astype(np.float32), contact_positions
 
 
-# 用途：
-# 根据机器人各接触 body 在连续帧中的世界坐标，结合运动速度和离地高度，逐帧判定每个接触点是否处于支撑接触状态。
+# 用途：根据机器人各接触 body 在连续帧中的世界坐标，结合运动速度和离地高度，逐帧判定每个接触点是否处于支撑接触状态。
 # 输入：
 # - contact_positions：形状为 [帧数, 接触点数, 3] 的世界坐标；每个接触点由源机器人配置的 contact_links 指定，最后一维的第三个分量是高度。
 # - fps：动作数据的采样帧率，用于将跨帧位移换算为每秒速度。

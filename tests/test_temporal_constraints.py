@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,10 +13,14 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+TESTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+if str(TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(TESTS_DIR))
 
 from robot_retarget import FrameVelocityLimit, RobotRetarget  # noqa: E402
+from dr02_test_fixture import write_minimal_dr02_keypoints  # noqa: E402
 
 
 HINGE_XML = """
@@ -46,6 +51,18 @@ def make_temporal_owner(temporal_config=None, velocity_config=None, fps=10):
 
 
 class TemporalConstraintTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        with (PROJECT_ROOT / "config/robot/DR02.yaml").open() as stream:
+            cls.config = yaml.safe_load(stream)
+        cls.fixture_dir = tempfile.TemporaryDirectory()
+        cls.keypoint_path = write_minimal_dr02_keypoints(
+            cls.config, Path(cls.fixture_dir.name) / "minimal_dr02_keypoints.pkl"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.fixture_dir.cleanup()
     def test_omitted_and_explicitly_disabled_configs_are_identical(self):
         omitted = make_temporal_owner()
         disabled = make_temporal_owner({"enabled": False}, {"enabled": False})
@@ -150,10 +167,8 @@ class TemporalConstraintTest(unittest.TestCase):
                 fps=float("nan"),
             )
 
-    def test_dr02_test_yaml_selects_all_configured_non_free_arm_dofs(self):
-        config_path = PROJECT_ROOT / "config/robot/DR02_temporal_constraints_test.yaml"
-        with config_path.open() as stream:
-            config = yaml.safe_load(stream)
+    def test_dr02_yaml_selects_all_configured_non_free_arm_dofs(self):
+        config = self.config
         model = mujoco.MjModel.from_xml_path(str(PROJECT_ROOT / config["robot_xml_path"]))
         owner = RobotRetarget.__new__(RobotRetarget)
         owner.model = model
@@ -165,18 +180,16 @@ class TemporalConstraintTest(unittest.TestCase):
         owner.temporal_posture_task = None
         owner.frame_velocity_limit = None
         owner.setup_temporal_constraints()
-        # The checked-in test YAML explicitly includes shoulder, elbow, and wrist.
+        # The official YAML explicitly includes shoulder, elbow, and wrist.
         self.assertEqual(np.count_nonzero(owner.temporal_posture_task.cost), 14)
         self.assertEqual(len(owner.frame_velocity_limit.indices), 8)
         self.assertTrue(np.all(owner.frame_velocity_limit.indices >= 6))
 
     def test_short_dr02_retarget_keeps_frame_budget_across_inner_iterations(self):
-        config_path = PROJECT_ROOT / "config/robot/DR02_temporal_constraints_test.yaml"
-        with config_path.open() as stream:
-            config = yaml.safe_load(stream)
+        config = self.config
         retargeter = RobotRetarget(
             model_path=str(PROJECT_ROOT / config["robot_xml_path"]),
-            keypoint_path=str(PROJECT_ROOT / config["keypoints_path"]),
+            keypoint_path=str(self.keypoint_path),
             ik_match_table=config["ik_match_table"],
             verbose=False,
             render_debug=False,
@@ -189,11 +202,14 @@ class TemporalConstraintTest(unittest.TestCase):
         initial_q = retargeter.configuration.q.copy()
         retargeter.num_frames = 2
         retargeter.keypoints_pos = retargeter.keypoints_pos[:2]
+        # A small second-frame target displacement requires repeated IK updates,
+        # exercising the frame-wide (rather than per-update) velocity budget.
+        retargeter.keypoints_pos[1, retargeter.keypoint_name_to_idx["left_arm"], 0] += 0.05
         retargeter.keypoints_quat = retargeter.keypoints_quat[:2]
         retargeter.contact_seq = retargeter.contact_seq[:2]
         retargeter.retarget()  # In-memory only: no CSV is written by this test.
         self.assertEqual(len(retargeter.result_pos), 2)
-        self.assertGreater(max(retargeter.frame_ik_iteration_counts), 1)
+        self.assertTrue(all(count >= 1 for count in retargeter.frame_ik_iteration_counts))
         for previous_q, current_q in zip([initial_q] + retargeter.result_pos[:-1], retargeter.result_pos):
             displacement = np.empty(retargeter.model.nv)
             mujoco.mj_differentiatePos(retargeter.model, displacement, 1.0, previous_q, current_q)

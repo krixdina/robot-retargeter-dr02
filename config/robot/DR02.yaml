@@ -66,6 +66,47 @@ contact_height_threshold: 0.025
 contact_height_lpf_alpha: 0.2
 contact_pos_fixed_factor: 15.0
 
+# Final DR02 motion-smoothing settings. Mink squares task costs in its
+# least-squares objective, so temporal cost 10.0 is intentionally explicit.
+temporal_continuity_regularization:
+  enabled: true
+  cost: 10.0
+  joint_name_substrings: ["shoulder", "elbow", "wrist"]
+
+# Per-frame hard joint-speed limits (rad/s) for the upper limbs.
+inter_frame_velocity_limit:
+  enabled: true
+  joint_velocity_limits:
+    shoulder: 8.0
+    elbow: 8.0
+
+# Initialize only frame zero with an isolated coarse solve, then use the
+# normal full-body objective plus the temporal constraints above.
+two_stage_optimization:
+  enabled: true
+  optimization_mode: first_frame_only
+  initialize_root_from_target: true
+  root_target_keypoint: hips_mean
+  coarse:
+    max_additional_iterations: 10
+    convergence_threshold: 0.001
+    ik_match_table: {
+      "hips_mean": ["base_link", 0, 10],
+      "left_hip": ["left_hip_x_link", 0, 10],
+      "left_thigh": ["left_knee_link", 0, 10],
+      "left_calf": ["left_ankle_x_link", 50, 10],
+      "right_hip": ["right_hip_x_link", 0, 10],
+      "right_thigh": ["right_knee_link", 0, 10],
+      "right_calf": ["right_ankle_x_link", 50, 10],
+      "head": ["head_link", 0, 100],
+      "left_shoulder": ["left_shoulder_x_link", 0, 100],
+      "left_arm": ["left_elbow_link", 0, 10],
+      "left_fore_arm": ["left_hand_link", 10, 10],
+      "right_shoulder": ["right_shoulder_x_link", 0, 100],
+      "right_arm": ["right_elbow_link", 0, 10],
+      "right_fore_arm": ["right_hand_link", 10, 10]
+    }
+
 # key_frame_config 用于把源数据中关键点的局部姿态，转换到目标机器人 body 所期望的局部坐标系约定下，
 # 用于解决源数据和目标机器人之间的局部坐标系定义不一致问题。
 key_frame_config:
@@ -159,5 +200,3 @@ key_frame_config:
       x: [0.0, 0.0, 1.0]
       y: [1.0, 0.0, 0.0]
       z: [0.0, 1.0, 0.0]
-
-  

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -13,10 +14,14 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+TESTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+if str(TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(TESTS_DIR))
 
 from robot_retarget import RobotRetarget  # noqa: E402
+from dr02_test_fixture import write_minimal_dr02_keypoints  # noqa: E402
 
 
 HINGE_XML = """
@@ -48,8 +53,16 @@ def make_owner(config):
 class TwoStageOptimizationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        with (PROJECT_ROOT / "config/robot/DR02_two_stage_optimization_test.yaml").open() as stream:
+        with (PROJECT_ROOT / "config/robot/DR02.yaml").open() as stream:
             cls.config = yaml.safe_load(stream)
+        cls.fixture_dir = tempfile.TemporaryDirectory()
+        cls.keypoint_path = write_minimal_dr02_keypoints(
+            cls.config, Path(cls.fixture_dir.name) / "minimal_dr02_keypoints.pkl"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.fixture_dir.cleanup()
 
     def make_retargeter(self):
         return self.make_retargeter_with_two_stage(self.config["two_stage_optimization"])
@@ -57,7 +70,7 @@ class TwoStageOptimizationTest(unittest.TestCase):
     def make_retargeter_with_two_stage(self, two_stage_optimization):
         return RobotRetarget(
             model_path=str(PROJECT_ROOT / self.config["robot_xml_path"]),
-            keypoint_path=str(PROJECT_ROOT / self.config["keypoints_path"]),
+            keypoint_path=str(self.keypoint_path),
             ik_match_table=self.config["ik_match_table"],
             verbose=False,
             render_debug=False,
