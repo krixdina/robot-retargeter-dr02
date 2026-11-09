@@ -52,3 +52,7 @@ dataset/private/**
 # ---- External Hugging Face datasets ----
 # MotionDecode is a large, locally downloaded dataset (CMRobot/MotionDecode).
 dataset/MotionDecode/
+
+# ---- Local documentation workspaces ----
+docs/
+docs-test/
