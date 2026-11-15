@@ -53,6 +53,8 @@ dataset/private/**
 # MotionDecode is a large, locally downloaded dataset (CMRobot/MotionDecode).
 dataset/MotionDecode/
 
-# ---- Local documentation workspaces ----
-docs/
+# ---- Local workflow documents ----
+!/docs/**/*.pdf
+/docs/whole_retarget_flow.md
+/docs/whole_retarget_flow.pdf
 docs-test/
